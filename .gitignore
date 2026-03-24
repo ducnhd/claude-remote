@@ -1,0 +1,6 @@
+claude-remote
+*.exe
+.superpowers/
+.claude-remote/
+*.log
+.DS_Store
