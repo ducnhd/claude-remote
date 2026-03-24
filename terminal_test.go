@@ -44,7 +44,7 @@ func TestRingBufferReplay(t *testing.T) {
 
 func TestTerminalSpawnEcho(t *testing.T) {
 	tm := NewTerminalManager("echo", []string{"hello from pty"})
-	if err := tm.Start(); err != nil {
+	if err := tm.StartInDir(""); err != nil {
 		t.Fatal(err)
 	}
 	defer tm.Stop()
@@ -58,6 +58,11 @@ func TestTerminalSpawnEcho(t *testing.T) {
 
 func TestTerminalWebSocket(t *testing.T) {
 	tm := NewTerminalManager("cat", nil) // cat echoes input
+	// Pre-start terminal before connecting WebSocket
+	if err := tm.StartInDir(""); err != nil {
+		t.Fatal(err)
+	}
+	defer tm.Stop()
 	handler := tm.WebSocketHandler()
 
 	server := httptest.NewServer(http.HandlerFunc(handler))

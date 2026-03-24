@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -19,6 +21,7 @@ type Server struct {
 	terminal *TerminalManager
 	files    *FileBrowser
 	mux      *http.ServeMux
+	useTLS   bool
 }
 
 func NewServer(cfg *Config, auth *Auth) *Server {
@@ -37,12 +40,23 @@ func (s *Server) registerRoutes() {
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("/ws/term", s.terminal.WebSocketHandler())
+	protected.HandleFunc("/api/claude/start", s.handleClaudeStart)
+	protected.HandleFunc("/api/claude/status", s.handleClaudeStatus)
 	protected.HandleFunc("/api/files", s.files.HandleList)
 	protected.HandleFunc("/api/files/read", s.files.HandleRead)
 
 	staticDir := filepath.Join(execDir(), "static")
+	if _, err := os.Stat(staticDir); err != nil {
+		// Fallback to current working directory (for go run)
+		if wd, wdErr := os.Getwd(); wdErr == nil {
+			staticDir = filepath.Join(wd, "static")
+		}
+	}
 	if _, err := os.Stat(staticDir); err == nil {
+		log.Printf("Serving static files from %s", staticDir)
 		protected.Handle("/", http.FileServer(http.Dir(staticDir)))
+	} else {
+		log.Printf("WARNING: static directory not found")
 	}
 
 	s.mux.Handle("/", s.auth.Middleware(protected))
@@ -60,16 +74,71 @@ func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to issue token"}`, http.StatusInternalServerError)
 		return
 	}
+	sameSite := http.SameSiteLaxMode
+	if s.useTLS {
+		sameSite = http.SameSiteStrictMode
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "claude-remote-auth",
 		Value:    jwt,
 		Path:     "/",
 		MaxAge:   90 * 24 * 3600,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   s.useTLS,
+		SameSite: sameSite,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Dir string `json:"dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	// Validate directory is within allowed dirs
+	resolved, err := filepath.EvalSymlinks(req.Dir)
+	if err != nil {
+		http.Error(w, `{"error":"invalid directory"}`, http.StatusBadRequest)
+		return
+	}
+	allowed := false
+	for _, d := range s.config.AllowedDirs {
+		ad, _ := filepath.EvalSymlinks(d)
+		if strings.HasPrefix(resolved, ad) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, `{"error":"directory not allowed"}`, http.StatusForbidden)
+		return
+	}
+	// Stop existing session if running
+	s.terminal.Stop()
+	// Start new session in the requested directory
+	if err := s.terminal.StartInDir(resolved); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":"failed to start: %s"}`, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"status":"started","dir":"%s"}`, resolved)
+}
+
+func (s *Server) handleClaudeStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	s.terminal.mu.Lock()
+	running := s.terminal.running
+	s.terminal.mu.Unlock()
+	fmt.Fprintf(w, `{"running":%v}`, running)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -78,23 +147,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loadTLSConfig() (*tls.Config, error) {
+	home := os.Getenv("HOME")
 	certDirs := []string{
-		"/var/run/tailscale",
-		filepath.Join(os.Getenv("HOME"), ".local/share/tailscale/certs"),
+		s.config.DataDir,                                    // ~/.claude-remote/
+		home + "/Desktop",                                   // where tailscale cert writes by default
+		"/var/run/tailscale",                                // Linux default
+		filepath.Join(home, ".local/share/tailscale/certs"), // alt Linux
 	}
 	for _, dir := range certDirs {
-		certFile := filepath.Join(dir, "*.crt")
-		matches, _ := filepath.Glob(certFile)
-		if len(matches) > 0 {
-			baseName := matches[0][:len(matches[0])-4]
-			cert, err := tls.LoadX509KeyPair(baseName+".crt", baseName+".key")
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.crt"))
+		for _, crtPath := range matches {
+			keyPath := crtPath[:len(crtPath)-4] + ".key"
+			cert, err := tls.LoadX509KeyPair(crtPath, keyPath)
 			if err != nil {
 				continue
 			}
+			log.Printf("TLS: using cert %s", crtPath)
 			return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
 		}
 	}
-	return nil, fmt.Errorf("no TLS certificates found")
+	return nil, fmt.Errorf("no TLS certificates found — run: sudo tailscale cert <hostname>.ts.net")
 }
 
 func (s *Server) Run() error {
@@ -109,8 +181,10 @@ func (s *Server) Run() error {
 	tlsCfg, tlsErr := s.loadTLSConfig()
 	if tlsErr != nil {
 		log.Printf("WARNING: No TLS certs found, running HTTP only: %v", tlsErr)
+		s.useTLS = false
 	} else {
 		srv.TLSConfig = tlsCfg
+		s.useTLS = true
 	}
 
 	stop := make(chan os.Signal, 1)

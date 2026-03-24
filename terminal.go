@@ -44,6 +44,12 @@ func (rb *RingBuffer) Bytes() []byte {
 	return out
 }
 
+func (rb *RingBuffer) Clear() {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	rb.data = rb.data[:0]
+}
+
 type TerminalManager struct {
 	cmd     string
 	args    []string
@@ -64,14 +70,18 @@ func NewTerminalManager(cmd string, args []string) *TerminalManager {
 	}
 }
 
-func (tm *TerminalManager) Start() error {
+func (tm *TerminalManager) StartInDir(dir string) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if tm.running {
 		return nil
 	}
+	tm.buffer.Clear()
 	c := exec.Command(tm.cmd, tm.args...)
 	c.Env = os.Environ()
+	if dir != "" {
+		c.Dir = dir
+	}
 	ptmx, err := pty.Start(c)
 	if err != nil {
 		return fmt.Errorf("start pty: %w", err)
@@ -159,10 +169,7 @@ func (tm *TerminalManager) WebSocketHandler() func(http.ResponseWriter, *http.Re
 		}()
 
 		if !tm.running {
-			if err := tm.Start(); err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte("Error: "+err.Error()))
-				return
-			}
+			conn.WriteMessage(websocket.TextMessage, []byte("Waiting for Claude to start...\r\n"))
 		}
 
 		tm.mu.Lock()

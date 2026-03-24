@@ -1,45 +1,58 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Claude Remote</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <style>.xterm { position: absolute; left: -9999px; }</style>
 </head>
 <body>
   <header id="header">
     <span id="status-dot" class="dot disconnected"></span>
     <span>Claude Remote</span>
-    <span id="status-text">Disconnected</span>
+    <span id="status-text">Chưa kết nối</span>
   </header>
 
-  <main>
-    <div id="tab-terminal" class="tab-content active">
-      <div id="terminal-container"></div>
+  <!-- Screen 1: Folder Picker -->
+  <div id="screen-picker" class="screen active">
+    <div class="picker-title">Chọn thư mục làm việc</div>
+    <div id="quick-dirs"></div>
+    <div id="dir-breadcrumb"></div>
+    <div id="dir-list"></div>
+    <div id="start-bar" class="hidden">
+      <div id="selected-dir"></div>
+      <button id="btn-start">Bắt đầu Claude</button>
     </div>
-    <div id="tab-files" class="tab-content">
-      <div id="breadcrumb"></div>
-      <div id="file-list"></div>
-      <div id="file-modal" class="modal hidden">
-        <div class="modal-header">
-          <span id="modal-filename"></span>
-          <button id="modal-close">&times;</button>
-          <button id="open-in-claude">Open in Claude</button>
-        </div>
-        <pre id="file-content"></pre>
-      </div>
-    </div>
-  </main>
+  </div>
 
-  <nav id="tabs">
-    <button class="tab active" data-tab="tab-terminal">Terminal</button>
-    <button class="tab" data-tab="tab-files">Files</button>
-  </nav>
+  <!-- Screen 2: Claude Chat -->
+  <div id="screen-chat" class="screen">
+    <div id="chat-toolbar">
+      <button id="btn-back" title="Chọn thư mục khác">←</button>
+      <span id="chat-dir"></span>
+    </div>
+    <div id="xterm-hidden"></div>
+    <div id="output-scroll">
+      <pre id="output-text"></pre>
+    </div>
+    <div id="quick-actions">
+      <button class="action-btn enter" data-key="\r">Enter ↵</button>
+      <button class="action-btn accept" data-key="y">✓ Chấp nhận</button>
+      <button class="action-btn reject" data-key="n">✗ Từ chối</button>
+      <button class="action-btn" data-key="\x1b">Esc</button>
+      <button class="action-btn" data-key="\x03">Ctrl+C</button>
+    </div>
+    <div id="input-bar">
+      <textarea id="chat-input" placeholder="Nhập tin nhắn tiếng Việt..." rows="1"></textarea>
+      <button id="btn-send">Gửi</button>
+      <button id="btn-hide-kb" title="Ẩn bàn phím">⌨↓</button>
+    </div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

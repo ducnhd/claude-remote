@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Testing strategy — unit tests for auth/files, integration tests for WebSocket+pty, table-driven patterns
+description: Testing strategy — unit tests for auth/config/files, integration tests for server+WebSocket+pty, table-driven patterns
 ---
 
 # Testing Strategy
@@ -9,69 +9,60 @@ description: Testing strategy — unit tests for auth/files, integration tests f
 
 - Test each component in isolation before integration
 - Table-driven tests for input validation (paths, tokens, JWTs)
-- Integration tests spawn real processes (not claude — use `echo` or `cat`)
+- Integration tests spawn real processes (`echo`, `cat` — not `claude`)
 - No mocks for filesystem — use `t.TempDir()`
+- Terminal tests pre-start the terminal via `StartInDir("")` before WebSocket connection
 
 ## Test Files
 
 | File | Tests |
 |------|-------|
-| auth_test.go | JWT sign/verify, token generation, expiry, revocation |
-| files_test.go | Path validation, allowlist, dotfile blocking, traversal |
-| terminal_test.go | WebSocket + pty integration (spawn `echo`, verify output) |
-| config_test.go | Config load/save, defaults |
+| `auth_test.go` | JWT sign/verify, token generation, single-use, expiry |
+| `config_test.go` | Config load/save, defaults, JSON persistence |
+| `files_test.go` | Path validation, allowlist, dotfile blocking, traversal, symlink resolution |
+| `terminal_test.go` | RingBuffer, pty spawn+echo, WebSocket I/O |
+| `server_test.go` | Route registration, health endpoint, auth middleware |
+| `integration_test.go` | Full auth flow (setup→scan→JWT), WebSocket terminal, file browser API |
 
-## Auth Tests (auth_test.go)
+## Key Test Patterns
 
+### Terminal tests require pre-start
 ```go
-func TestGenerateToken(t *testing.T)     // 64 chars, crypto random
-func TestJWTSignVerify(t *testing.T)     // round-trip sign → verify
-func TestJWTExpired(t *testing.T)        // reject expired token
-func TestJWTWrongSecret(t *testing.T)    // reject after revoke
-func TestTokenSingleUse(t *testing.T)    // second scan fails
+// WebSocket no longer auto-starts terminal — must call StartInDir first
+tm := NewTerminalManager("cat", nil)
+tm.StartInDir("")  // pre-start before WebSocket connect
+defer tm.Stop()
 ```
 
-## File Browser Tests (files_test.go)
-
-Table-driven:
+### File browser symlink resolution
 ```go
-tests := []struct {
-    name      string
-    path      string
-    allowed   []string
-    wantErr   bool
-}{
-    {"valid path", "/Users/dat/Desktop", []string{"/Users/dat"}, false},
-    {"outside allowlist", "/etc/passwd", []string{"/Users/dat"}, true},
-    {"path traversal", "/Users/dat/../etc/passwd", []string{"/Users/dat"}, true},
-    {"dotfile blocked", "/Users/dat/.ssh/id_rsa", []string{"/Users/dat"}, true},
-    {"claude-remote dir", "/Users/dat/.claude-remote/secret.key", []string{"/Users/dat"}, true},
-}
+// t.TempDir() returns /var/folders/... which resolves to /private/var/folders/...
+// AllowedDirs must also be resolved
+resolvedDir, _ := filepath.EvalSymlinks(dir)
+fb := NewFileBrowser([]string{resolvedDir})
 ```
 
-## Terminal Tests (terminal_test.go)
-
-Integration test with real pty:
+### Server tests create full Config
 ```go
-func TestTerminalEcho(t *testing.T)      // spawn "echo hello", verify WebSocket receives "hello"
-func TestTerminalResize(t *testing.T)    // send resize, verify pty window size
-func TestTerminalReconnect(t *testing.T) // disconnect + reconnect, verify buffer replay
+cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+cfg.Save()
+auth := NewAuth(cfg.SecretPath())
+auth.GenerateSecret()
+server := NewServer(cfg, auth)
 ```
-
-Use `cat` or `echo` instead of `claude` in tests — fast, deterministic.
 
 ## Running Tests
 
 ```bash
 go test ./... -v -count=1              # All tests
 go test -run TestJWT -v                # Single test
-go test -run TestFileBrowser -v        # File browser tests
-go test -race ./...                    # Race detector (WebSocket concurrency)
+go test -race ./... -v -count=1        # Race detector
 ```
 
 ## What NOT to Test
 
 - Tailscale connectivity (external dependency)
-- xterm.js rendering (browser-side)
+- xterm.js rendering (browser-side, hidden anyway)
 - launchd plist loading (OS-level)
 - QR code visual output (library responsibility)
+- Vietnamese IME behavior (browser-specific)

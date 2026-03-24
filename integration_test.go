@@ -89,6 +89,12 @@ func TestWebSocketTerminal(t *testing.T) {
 	server := NewServer(cfg, auth)
 	server.registerRoutes()
 
+	// Pre-start terminal in the test directory
+	if err := server.terminal.StartInDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer server.terminal.Stop()
+
 	ts := httptest.NewServer(http.HandlerFunc(server.terminal.WebSocketHandler()))
 	defer ts.Close()
 

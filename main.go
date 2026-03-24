@@ -75,10 +75,22 @@ func cmdSetup() {
 	token := auth.GenerateToken()
 
 	hostname := detectTailscaleHost()
-	url := fmt.Sprintf("https://%s:%d/auth/scan?token=%s", hostname, cfg.Port, token)
+
+	// Detect if TLS certs are available to choose protocol
+	proto := "http"
+	home, _ := os.UserHomeDir()
+	for _, dir := range []string{cfg.DataDir, home + "/Desktop", "/var/run/tailscale"} {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.crt"))
+		if len(matches) > 0 {
+			proto = "https"
+			break
+		}
+	}
+	url := fmt.Sprintf("%s://%s:%d/auth/scan?token=%s", proto, hostname, cfg.Port, token)
 
 	fmt.Println("Claude Remote Setup")
 	fmt.Println("===================")
+	fmt.Printf("Protocol: %s\n", strings.ToUpper(proto))
 	auth.PrintQR(url)
 	fmt.Println("\nScan this QR code with your phone to connect.")
 	fmt.Println("The server must be running: claude-remote serve")

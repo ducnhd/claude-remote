@@ -132,6 +132,15 @@ func (fb *FileBrowser) HandleList(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = fb.allowedDirs[0]
 	}
+	// Expand ~ to home directory
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		home, _ := os.UserHomeDir()
+		if path == "~" {
+			path = home
+		} else {
+			path = filepath.Join(home, path[2:])
+		}
+	}
 	entries, err := fb.ListDir(path)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusForbidden)
