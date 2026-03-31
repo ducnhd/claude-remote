@@ -92,6 +92,62 @@ func TestJWTExpired(t *testing.T) {
 	}
 }
 
+func TestGenerateHandoffToken(t *testing.T) {
+	a := NewAuth(t.TempDir() + "/secret.key")
+	token := a.GenerateHandoffToken()
+	if len(token) != 64 {
+		t.Errorf("want 64 chars, got %d", len(token))
+	}
+	if _, ok := a.handoffTokens[token]; !ok {
+		t.Error("token not stored in handoffTokens")
+	}
+}
+
+func TestHandoffTokenSingleUse(t *testing.T) {
+	a := NewAuth(t.TempDir() + "/secret.key")
+	token := a.GenerateHandoffToken()
+	if !a.ValidateHandoffToken(token) {
+		t.Error("first use should succeed")
+	}
+	if a.ValidateHandoffToken(token) {
+		t.Error("second use should fail")
+	}
+}
+
+func TestHandoffTokenExpired(t *testing.T) {
+	a := NewAuth(t.TempDir() + "/secret.key")
+	token := a.GenerateHandoffToken()
+	// Manually back-date the expiry.
+	a.mu.Lock()
+	a.handoffTokens[token] = time.Now().Add(-1 * time.Minute)
+	a.mu.Unlock()
+	if a.ValidateHandoffToken(token) {
+		t.Error("expired token should fail")
+	}
+}
+
+func TestHandoffTokenInvalid(t *testing.T) {
+	a := NewAuth(t.TempDir() + "/secret.key")
+	if a.ValidateHandoffToken("not-a-real-token") {
+		t.Error("invalid token should fail")
+	}
+}
+
+func TestGenerateHandoffTokenCleansExpired(t *testing.T) {
+	a := NewAuth(t.TempDir() + "/secret.key")
+	// Insert a fake expired token.
+	a.mu.Lock()
+	a.handoffTokens["old"] = time.Now().Add(-10 * time.Minute)
+	a.mu.Unlock()
+	a.GenerateHandoffToken()
+	a.mu.Lock()
+	_, stillPresent := a.handoffTokens["old"]
+	a.mu.Unlock()
+	if stillPresent {
+		t.Error("GenerateHandoffToken should clean up expired tokens")
+	}
+}
+
 func TestJWTWrongSecret(t *testing.T) {
 	dir := t.TempDir()
 	a := &Auth{secretPath: dir + "/secret.key"}

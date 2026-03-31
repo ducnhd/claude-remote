@@ -14,17 +14,19 @@ import (
 )
 
 type Auth struct {
-	secret       []byte
-	secretPath   string
-	pendingToken string
-	jwtExpiry    time.Duration
-	mu           sync.Mutex
+	secret        []byte
+	secretPath    string
+	pendingToken  string
+	jwtExpiry     time.Duration
+	handoffTokens map[string]time.Time
+	mu            sync.Mutex
 }
 
 func NewAuth(secretPath string) *Auth {
 	return &Auth{
-		secretPath: secretPath,
-		jwtExpiry:  90 * 24 * time.Hour,
+		secretPath:    secretPath,
+		jwtExpiry:     90 * 24 * time.Hour,
+		handoffTokens: make(map[string]time.Time),
 	}
 }
 
@@ -65,6 +67,34 @@ func (a *Auth) ValidateToken(token string) bool {
 	}
 	a.pendingToken = "" // single-use
 	return true
+}
+
+func (a *Auth) GenerateHandoffToken() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Clean up expired tokens.
+	now := time.Now()
+	for tok, exp := range a.handoffTokens {
+		if now.After(exp) {
+			delete(a.handoffTokens, tok)
+		}
+	}
+	b := make([]byte, 32)
+	rand.Read(b)
+	token := hex.EncodeToString(b)
+	a.handoffTokens[token] = now.Add(5 * time.Minute)
+	return token
+}
+
+func (a *Auth) ValidateHandoffToken(token string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	exp, ok := a.handoffTokens[token]
+	if !ok {
+		return false
+	}
+	delete(a.handoffTokens, token) // single-use
+	return time.Now().Before(exp)
 }
 
 func (a *Auth) IssueJWT(deviceID string) (string, error) {
