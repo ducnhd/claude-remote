@@ -29,6 +29,18 @@ claude-remote uninstall  # Unload + remove launchd plist
 claude-remote status     # Show running state, port, Tailscale hostname
 ```
 
+### MCP Registration (one-time)
+
+```bash
+claude mcp add --transport http claude-remote http://localhost:8822/mcp
+```
+
+### Skill
+
+| Command | Description |
+|---------|-------------|
+| `/remote` | Generate QR to continue session on phone |
+
 ## Architecture
 
 ```
@@ -112,7 +124,9 @@ Tailscale VPN mesh — Mac + phone on same tailnet. MagicDNS for hostname. `tail
 |-------|--------|------|---------|
 | `/auth/scan` | GET | No | QR token exchange → set JWT cookie → redirect / |
 | `/health` | GET | No | Health check `{"status":"ok"}` |
-| `/api/claude/start` | POST | Yes | Start Claude in directory `{"dir":"/path"}` |
+| `/mcp` | POST | Localhost | MCP Streamable HTTP (JSON-RPC) — handoff + status tools |
+| `/handoff` | GET | Token | Handoff token exchange → set JWT cookie → redirect with params |
+| `/api/claude/start` | POST | Yes | Start Claude in directory `{"dir":"/path","resume":bool}` |
 | `/api/claude/status` | GET | Yes | Check if Claude session running `{"running":bool}` |
 | `/api/files` | GET | Yes | List directory (supports `~/` expansion) |
 | `/api/files/read` | GET | Yes | Read file content (max 1MB) |
