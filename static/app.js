@@ -9,6 +9,11 @@
   let syncTimer = null;
   let termCols = 50; // will be calculated from screen width
 
+  // --- Handoff URL param detection ---
+  const urlParams = new URLSearchParams(location.search);
+  const handoffDir = urlParams.get('dir');
+  const handoffMode = urlParams.get('mode');
+
   const quickDirs = [
     { name: 'Desktop', icon: '🖥️' },
     { name: 'Downloads', icon: '📥' },
@@ -371,15 +376,78 @@
     setTimeout(() => chatInput.focus(), 50);
   }
 
-  // --- Init ---
-  initPicker();
-
-  fetch('/api/claude/status').then(r => r.json()).then(data => {
-    if (data.running) {
-      showScreen('screen-chat');
-      document.getElementById('chat-dir').textContent = 'Phiên đang chạy';
-      initTerminal();
-      connectWS();
+  // --- Handoff Mode Selector ---
+  function showHandoffScreen(dir, mode) {
+    history.replaceState({}, '', '/');
+    if (mode === 'attach') {
+      attachToSession(dir);
+      return;
     }
-  }).catch(() => {});
+    if (mode === 'continue') {
+      startContinueSession(dir);
+      return;
+    }
+    document.getElementById('handoff-dir').textContent = dir;
+    showScreen('screen-handoff');
+  }
+
+  function attachToSession(dir) {
+    showScreen('screen-chat');
+    document.getElementById('chat-dir').textContent = dir;
+    document.getElementById('output-text').innerHTML = '';
+    initTerminal();
+    connectWS();
+  }
+
+  async function startContinueSession(dir) {
+    showScreen('screen-chat');
+    document.getElementById('chat-dir').textContent = dir;
+    document.getElementById('output-text').innerHTML = '';
+    try {
+      const resp = await fetch('/api/claude/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: dir, resume: true })
+      });
+      const data = await resp.json();
+      if (data.error) {
+        alert('Lỗi: ' + data.error);
+        showScreen('screen-picker');
+        return;
+      }
+    } catch (e) {
+      alert('Lỗi kết nối: ' + e.message);
+      showScreen('screen-picker');
+      return;
+    }
+    initTerminal();
+    connectWS();
+  }
+
+  document.getElementById('btn-attach').addEventListener('click', () => {
+    attachToSession(handoffDir || selectedDir);
+  });
+  document.getElementById('btn-continue').addEventListener('click', () => {
+    startContinueSession(handoffDir || selectedDir);
+  });
+  document.getElementById('btn-new-folder').addEventListener('click', () => {
+    history.replaceState({}, '', '/');
+    showScreen('screen-picker');
+    initPicker();
+  });
+
+  // --- Init ---
+  if (handoffDir && handoffMode) {
+    showHandoffScreen(handoffDir, handoffMode);
+  } else {
+    initPicker();
+    fetch('/api/claude/status').then(r => r.json()).then(data => {
+      if (data.running) {
+        showScreen('screen-chat');
+        document.getElementById('chat-dir').textContent = 'Phiên đang chạy';
+        initTerminal();
+        connectWS();
+      }
+    }).catch(() => {});
+  }
 })();

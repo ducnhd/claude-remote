@@ -129,3 +129,19 @@ header {
 }
 
 .hidden { display: none !important; }
+
+/* Handoff Mode Selector */
+#handoff-options {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 16px 12px; flex: 1;
+}
+.handoff-btn {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 16px; border: 1px solid #333; border-radius: 12px;
+  background: #16213e; color: #eee; cursor: pointer;
+  text-align: left;
+}
+.handoff-btn:active { background: #1e3a5f; border-color: #60a5fa; }
+.handoff-icon { font-size: 24px; }
+.handoff-label { font-size: 16px; font-weight: 600; }
+.handoff-desc { font-size: 13px; color: #888; }
