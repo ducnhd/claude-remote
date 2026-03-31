@@ -39,6 +39,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/auth/scan", s.handleAuthScan)
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/mcp", s.handleMCP)
+	s.mux.HandleFunc("/handoff", s.handleHandoff)
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("/ws/term", s.terminal.WebSocketHandler())
@@ -92,13 +93,52 @@ func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" || !s.auth.ValidateHandoffToken(token) {
+		http.Error(w, `{"error":"invalid or expired handoff token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	dir := r.URL.Query().Get("dir")
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "choose"
+	}
+
+	// Issue JWT cookie
+	deviceID := fmt.Sprintf("handoff-%d", time.Now().UnixNano())
+	jwt, err := s.auth.IssueJWT(deviceID)
+	if err != nil {
+		http.Error(w, `{"error":"failed to issue token"}`, http.StatusInternalServerError)
+		return
+	}
+	sameSite := http.SameSiteLaxMode
+	if s.useTLS {
+		sameSite = http.SameSiteStrictMode
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "claude-remote-auth",
+		Value:    jwt,
+		Path:     "/",
+		MaxAge:   90 * 24 * 3600,
+		HttpOnly: true,
+		Secure:   s.useTLS,
+		SameSite: sameSite,
+	})
+
+	redirect := fmt.Sprintf("/?dir=%s&mode=%s", dir, mode)
+	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
 func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		Dir string `json:"dir"`
+		Dir    string `json:"dir"`
+		Resume bool   `json:"resume"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
@@ -125,10 +165,16 @@ func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
 	// Stop existing session if running
 	s.terminal.Stop()
 	// Start new session in the requested directory
-	if err := s.terminal.StartInDir(resolved); err != nil {
+	var startErr error
+	if req.Resume {
+		startErr = s.terminal.StartWithResume(resolved)
+	} else {
+		startErr = s.terminal.StartInDir(resolved)
+	}
+	if startErr != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error":"failed to start: %s"}`, err.Error())
+		fmt.Fprintf(w, `{"error":"failed to start: %s"}`, startErr.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
