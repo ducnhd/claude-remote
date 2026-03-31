@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -217,4 +218,38 @@ func execDir() string {
 		return "."
 	}
 	return filepath.Dir(exe)
+}
+
+func detectTailscaleHost() string {
+	out, err := exec.Command("tailscale", "status", "--json").Output()
+	if err != nil {
+		return "localhost"
+	}
+	var status struct {
+		Self struct {
+			DNSName string `json:"DNSName"`
+		} `json:"Self"`
+	}
+	if err := json.Unmarshal(out, &status); err == nil && status.Self.DNSName != "" {
+		dns := status.Self.DNSName
+		if len(dns) > 0 && dns[len(dns)-1] == '.' {
+			dns = dns[:len(dns)-1]
+		}
+		return dns
+	}
+	ipOut, err := exec.Command("tailscale", "ip", "-4").Output()
+	if err != nil {
+		return "localhost"
+	}
+	return strings.TrimSpace(string(ipOut))
+}
+
+func detectProto(dataDirs ...string) string {
+	for _, dir := range dataDirs {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.crt"))
+		if len(matches) > 0 {
+			return "https"
+		}
+	}
+	return "http"
 }

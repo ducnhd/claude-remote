@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -183,30 +182,6 @@ func cmdStatus() {
 
 	hostname := detectTailscaleHost()
 	fmt.Printf("Tailscale: %s\n", hostname)
-}
-
-func detectTailscaleHost() string {
-	out, err := exec.Command("tailscale", "status", "--json").Output()
-	if err != nil {
-		return "localhost"
-	}
-	var status struct {
-		Self struct {
-			DNSName string `json:"DNSName"`
-		} `json:"Self"`
-	}
-	if err := json.Unmarshal(out, &status); err == nil && status.Self.DNSName != "" {
-		dns := status.Self.DNSName
-		if len(dns) > 0 && dns[len(dns)-1] == '.' {
-			dns = dns[:len(dns)-1]
-		}
-		return dns
-	}
-	ipOut, err := exec.Command("tailscale", "ip", "-4").Output()
-	if err != nil {
-		return "localhost"
-	}
-	return strings.TrimSpace(string(ipOut))
 }
 
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
