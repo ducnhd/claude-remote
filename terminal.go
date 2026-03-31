@@ -53,6 +53,7 @@ func (rb *RingBuffer) Clear() {
 type TerminalManager struct {
 	cmd     string
 	args    []string
+	dir     string
 	ptmx    *os.File
 	process *exec.Cmd
 	buffer  *RingBuffer
@@ -77,7 +78,61 @@ func (tm *TerminalManager) StartInDir(dir string) error {
 		return nil
 	}
 	tm.buffer.Clear()
+	tm.dir = dir
 	c := exec.Command(tm.cmd, tm.args...)
+	c.Env = os.Environ()
+	if dir != "" {
+		c.Dir = dir
+	}
+	ptmx, err := pty.Start(c)
+	if err != nil {
+		return fmt.Errorf("start pty: %w", err)
+	}
+	tm.ptmx = ptmx
+	tm.process = c
+	tm.running = true
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				tm.buffer.Write(data)
+				tm.broadcast(data)
+			}
+			if err != nil {
+				break
+			}
+		}
+		tm.mu.Lock()
+		tm.running = false
+		tm.mu.Unlock()
+	}()
+
+	go func() {
+		tm.process.Wait()
+		tm.mu.Lock()
+		tm.running = false
+		if tm.ptmx != nil {
+			tm.ptmx.Close()
+		}
+		tm.mu.Unlock()
+	}()
+
+	return nil
+}
+
+func (tm *TerminalManager) StartWithResume(dir string) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.running {
+		return nil
+	}
+	tm.buffer.Clear()
+	tm.dir = dir
+	c := exec.Command(tm.cmd, "--continue")
 	c.Env = os.Environ()
 	if dir != "" {
 		c.Dir = dir

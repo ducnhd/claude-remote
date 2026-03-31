@@ -56,6 +56,37 @@ func TestTerminalSpawnEcho(t *testing.T) {
 	}
 }
 
+func TestTerminalDir(t *testing.T) {
+	tm := NewTerminalManager("echo", []string{"dir test"})
+	if err := tm.StartInDir("/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	defer tm.Stop()
+
+	if tm.dir != "/tmp" {
+		t.Errorf("want tm.dir == /tmp, got %q", tm.dir)
+	}
+}
+
+func TestStartWithResume(t *testing.T) {
+	// Use "echo" as a stand-in; "--continue" is just another arg for echo
+	tm := NewTerminalManager("echo", nil)
+	if err := tm.StartWithResume("/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	defer tm.Stop()
+
+	if tm.dir != "/tmp" {
+		t.Errorf("want tm.dir == /tmp, got %q", tm.dir)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	output := string(tm.buffer.Bytes())
+	if !strings.Contains(output, "--continue") {
+		t.Errorf("want output containing '--continue', got %q", output)
+	}
+}
+
 func TestTerminalWebSocket(t *testing.T) {
 	tm := NewTerminalManager("cat", nil) // cat echoes input
 	// Pre-start terminal before connecting WebSocket
