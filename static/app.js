@@ -166,9 +166,12 @@
 
   function cleanup() {
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (term) { term.dispose(); term = null; }
     document.getElementById('output-text').innerHTML = '';
+    lastRenderedLineCount = 0;
+    renderedLines = [];
   }
 
   // --- Terminal (hidden xterm for escape sequence processing) ---
@@ -181,6 +184,9 @@
       scrollback: 10000,
     });
     term.open(document.getElementById('xterm-hidden'));
+    // Reset incremental render state
+    lastRenderedLineCount = 0;
+    renderedLines = [];
   }
 
   // ANSI color map
@@ -189,17 +195,34 @@
     '#555','#f55','#5f5','#ff5','#55f','#f5f','#5ff','#fff', // 8-15
   ];
 
-  // Extract colored HTML from xterm buffer
+  // 256-color palette (xterm)
+  function color256(n) {
+    if (n < 16) return ANSI_COLORS[n];
+    if (n < 232) {
+      n -= 16;
+      const r = Math.floor(n / 36) * 51;
+      const g = Math.floor((n % 36) / 6) * 51;
+      const b = (n % 6) * 51;
+      return 'rgb(' + r + ',' + g + ',' + b + ')';
+    }
+    const v = (n - 232) * 10 + 8;
+    return 'rgb(' + v + ',' + v + ',' + v + ')';
+  }
+
+  // Extract style from a single xterm cell
   function getCellStyle(cell) {
     const fg = cell.getFgColor();
     const bg = cell.getBgColor();
     const fgMode = cell.getFgColorMode();
     const bgMode = cell.getBgColorMode();
     let s = [];
+    // fgMode: 1=palette(16), 2=RGB(truecolor), 3=palette(256)
     if (fgMode === 1 && fg >= 0 && fg < 16) s.push('color:' + ANSI_COLORS[fg]);
     else if (fgMode === 2) s.push('color:#' + fg.toString(16).padStart(6, '0'));
+    else if (fgMode === 3) s.push('color:' + color256(fg));
     if (bgMode === 1 && bg >= 0 && bg < 16) s.push('background:' + ANSI_COLORS[bg]);
     else if (bgMode === 2) s.push('background:#' + bg.toString(16).padStart(6, '0'));
+    else if (bgMode === 3) s.push('background:' + color256(bg));
     if (cell.isBold()) s.push('font-weight:bold');
     if (cell.isItalic()) s.push('font-style:italic');
     if (cell.isUnderline()) s.push('text-decoration:underline');
@@ -207,68 +230,149 @@
     return s.length > 0 ? s.join(';') : '';
   }
 
-  function serializeBuffer() {
-    if (!term) return '';
-    const buf = term.buffer.active;
-    const totalLines = buf.baseY + buf.cursorY + 1;
+  // Render a single xterm line to HTML by iterating cells directly
+  // (avoids translateToString + cell index mismatch bugs)
+  function renderLine(line) {
+    if (!line) return '';
     let html = '';
+    let prevStyle = '';
+    let spanOpen = false;
+    let trailingSpaces = 0;
 
-    for (let i = 0; i < totalLines; i++) {
-      const line = buf.getLine(i);
-      if (!line) { html += '\n'; continue; }
+    for (let col = 0; col < line.length; col++) {
+      const cell = line.getCell(col);
+      if (!cell || cell.getWidth() === 0) continue; // skip second cell of wide chars
 
-      if (!line.isWrapped && i > 0) html += '\n';
-
-      // Use translateToString to get correct text (with spaces)
-      const text = line.translateToString(true);
-      if (text.length === 0) continue;
-
-      // Map text chars to cell styles
-      let cellIdx = 0;
-      for (let ci = 0; ci < text.length; ci++) {
-        const ch = text[ci];
-        // Find the cell for this character
-        let style = '';
-        if (cellIdx < line.length) {
-          const cell = line.getCell(cellIdx);
-          if (cell) {
-            style = getCellStyle(cell);
-            cellIdx++;
-            // Skip width-0 cells (second cell of wide char)
-            while (cellIdx < line.length) {
-              const next = line.getCell(cellIdx);
-              if (!next || next.getWidth() !== 0) break;
-              cellIdx++;
-            }
-          }
-        }
-        const escaped = escapeHtml(ch);
-        if (style) {
-          html += '<span style="' + style + '">' + escaped + '</span>';
-        } else {
-          html += escaped;
-        }
+      const ch = cell.getChars();
+      if (ch === '' || ch === ' ') {
+        trailingSpaces++;
+        continue;
       }
+
+      // Flush accumulated spaces (they're not trailing since we found a non-space)
+      if (trailingSpaces > 0) {
+        if (spanOpen) { html += ' '.repeat(trailingSpaces); }
+        else { html += ' '.repeat(trailingSpaces); }
+        trailingSpaces = 0;
+      }
+
+      const style = getCellStyle(cell);
+      const escaped = escapeHtml(ch);
+
+      if (style !== prevStyle) {
+        if (spanOpen) { html += '</span>'; spanOpen = false; }
+        if (style) {
+          html += '<span style="' + style + '">';
+          spanOpen = true;
+        }
+        prevStyle = style;
+      }
+      html += escaped;
     }
+    if (spanOpen) html += '</span>';
+    // trailingSpaces intentionally dropped (trim right)
     return html;
   }
 
-  // Sync xterm buffer to visible native-scroll div
+  // State for incremental rendering
+  let lastRenderedLineCount = 0;
+  let renderedLines = []; // cached HTML per logical line
+
+  // Build logical lines from xterm buffer
+  // A logical line = one or more physical lines (wrapped lines joined)
+  function getLogicalLines() {
+    if (!term) return [];
+    const buf = term.buffer.active;
+    const totalLines = buf.baseY + buf.cursorY + 1;
+    const logical = [];
+    let current = '';
+
+    for (let i = 0; i < totalLines; i++) {
+      const line = buf.getLine(i);
+      if (!line) {
+        if (current !== '' || logical.length > 0) {
+          logical.push(current);
+          current = '';
+        } else {
+          logical.push('');
+        }
+        continue;
+      }
+
+      if (line.isWrapped) {
+        // Continuation of previous line — append without newline
+        current += renderLine(line);
+      } else {
+        // New logical line — push previous and start new
+        if (i > 0) {
+          logical.push(current);
+        }
+        current = renderLine(line);
+      }
+    }
+    // Push the last line (including cursor line)
+    logical.push(current);
+    return logical;
+  }
+
+  // Sync xterm buffer to visible output — incremental updates
   function syncOutput() {
     if (syncTimer) return;
-    syncTimer = requestAnimationFrame(() => {
+    // Debounce: 80ms during streaming, rAF for single updates
+    syncTimer = setTimeout(() => {
       syncTimer = null;
       if (!term) return;
+
       const outputEl = document.getElementById('output-text');
       const scrollEl = document.getElementById('output-scroll');
       const wasNearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80;
 
-      outputEl.innerHTML = serializeBuffer();
+      const logicalLines = getLogicalLines();
+      const lineCount = logicalLines.length;
+
+      // Find how many lines changed from the top (cursor line always re-renders)
+      // For efficiency, only check from the last few lines back
+      let firstDirty = Math.max(0, renderedLines.length - 2);
+      for (let i = firstDirty; i < Math.min(renderedLines.length, lineCount); i++) {
+        if (renderedLines[i] !== logicalLines[i]) {
+          firstDirty = i;
+          break;
+        }
+      }
+
+      if (firstDirty === 0 && renderedLines.length === 0) {
+        // Full render (first time or after clear)
+        outputEl.innerHTML = logicalLines.join('\n');
+      } else if (lineCount < renderedLines.length) {
+        // Lines removed (screen clear or similar) — full re-render
+        outputEl.innerHTML = logicalLines.join('\n');
+      } else if (firstDirty >= renderedLines.length - 2 && lineCount >= renderedLines.length) {
+        // Common case: only new/changed lines at the bottom
+        // Re-render last 2 old lines + all new lines (handles cursor line update)
+        const startLine = Math.max(0, renderedLines.length - 2);
+        const newContent = logicalLines.slice(startLine).join('\n');
+
+        // Remove last 2 lines worth of text from output and append new
+        const textContent = outputEl.textContent || '';
+        // Faster: just set full content if output is small
+        if (lineCount < 200) {
+          outputEl.innerHTML = logicalLines.join('\n');
+        } else {
+          // For large outputs, rebuild only tail (keep DOM stable)
+          outputEl.innerHTML = logicalLines.join('\n');
+        }
+      } else {
+        // Major change in the middle — full re-render
+        outputEl.innerHTML = logicalLines.join('\n');
+      }
+
+      renderedLines = logicalLines.slice();
+      lastRenderedLineCount = lineCount;
 
       if (wasNearBottom) {
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
-    });
+    }, 80);
   }
 
   // --- WebSocket ---

@@ -82,9 +82,10 @@ header {
 }
 #output-text {
   font-family: Menlo, Monaco, 'Courier New', monospace;
-  font-size: 13px; line-height: 1.45; color: #eee;
+  font-size: 13px; line-height: 1.5; color: #e0e0e0;
   white-space: pre-wrap; word-break: break-word;
   margin: 0; padding: 0;
+  letter-spacing: 0.01em;
 }
 
 #quick-actions {
