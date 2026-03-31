@@ -38,6 +38,7 @@ func NewServer(cfg *Config, auth *Auth) *Server {
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/auth/scan", s.handleAuthScan)
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/mcp", s.handleMCP)
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("/ws/term", s.terminal.WebSocketHandler())
