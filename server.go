@@ -251,11 +251,32 @@ func (s *Server) Run() error {
 		}
 	}()
 
+	// When TLS is active, start a separate HTTP-only listener on localhost
+	// for MCP connections (Claude Code connects locally, doesn't need TLS)
+	var mcpSrv *http.Server
+	if s.useTLS {
+		mcpMux := http.NewServeMux()
+		mcpMux.HandleFunc("/mcp", s.handleMCP)
+		mcpMux.HandleFunc("/health", s.handleHealth)
+		mcpPort := s.config.Port + 1 // 8823
+		mcpAddr := fmt.Sprintf("127.0.0.1:%d", mcpPort)
+		mcpSrv = &http.Server{Addr: mcpAddr, Handler: mcpMux}
+		go func() {
+			log.Printf("MCP HTTP listener on %s (localhost only)", mcpAddr)
+			if err := mcpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("MCP listener error: %v", err)
+			}
+		}()
+	}
+
 	<-stop
 	log.Println("Shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	s.terminal.Stop()
+	if mcpSrv != nil {
+		mcpSrv.Shutdown(ctx)
+	}
 	return srv.Shutdown(ctx)
 }
 
