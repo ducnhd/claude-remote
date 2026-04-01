@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-**Claude Remote** — a lightweight Go server that lets you control Claude Code CLI from your phone browser, anywhere over the internet. Also acts as an MCP server so Claude Code can trigger phone handoff via `/handoff`.
+**Claude Remote** — a lightweight Go server that lets you control Claude Code CLI from your phone browser, anywhere over the internet. Also acts as an MCP server so Claude Code can trigger phone handoff.
 
-**Core idea**: Mac runs a Go server that wraps Claude Code in a pseudo-terminal, exposes it via WebSocket, and provides a mobile-friendly chat UI. Phone connects through Tailscale VPN mesh. Claude Code connects via MCP (localhost HTTP) to generate handoff QR codes. Auth via one-time QR code scan, persistent JWT cookie. Auto-starts on Mac boot via launchd.
+**Core idea**: Mac runs a Go server that wraps Claude Code in a pseudo-terminal, exposes it via WebSocket, and provides a mobile-friendly chat UI. Phone connects through Tailscale VPN mesh. Claude Code connects via MCP (localhost HTTP on port 8823) to generate handoff QR codes. Auth via one-time QR code scan, persistent JWT cookie (SameSite=Lax for cross-site QR scan compatibility). Auto-starts on Mac boot via launchd.
 
 **Target**: Single user, single Mac. Personal tool, not a product.
 
@@ -35,32 +35,34 @@ claude-remote status     # Show running state, port, Tailscale hostname
 claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```
 
-Note: MCP uses port 8823 (HTTP, localhost only). The main web UI uses port 8822 (HTTPS via Tailscale). When TLS is active, the server runs two listeners — HTTPS on 8822 for phone access, HTTP on 8823 for local MCP connections.
+MCP uses port 8823 (HTTP, localhost only). The main web UI uses port 8822 (HTTPS via Tailscale). When TLS is active, the server runs two listeners. Without TLS, single HTTP listener on 8822 only.
 
-### Skill
+### Triggering Handoff
 
-| Command | Description |
-|---------|-------------|
-| `/handoff` | Generate QR to continue session on phone |
+MCP tools are available globally in Claude Code. Just ask:
+- "handoff sang điện thoại"
+- "tạo QR cho điện thoại"
+
+Claude calls the `handoff` MCP tool and displays QR. In Claude Code CLI, `/handoff` skill also works.
 
 ## Architecture
 
 ```
 Go binary (single process, two listeners when TLS active)
 ├── main.go        # CLI entry point (setup/serve/revoke/install/uninstall/status)
-├── server.go      # HTTP/HTTPS server, routes, JWT middleware, handoff endpoint,
-│                  #   detectTailscaleHost, detectProto, dual-listener setup
+├── server.go      # HTTP/HTTPS server, routes, auth cookie helper (setAuthCookie),
+│                  #   handoff endpoint, detectTailscaleHost, detectProto, dual-listener
 ├── mcp.go         # MCP Streamable HTTP handler (JSON-RPC), handoff + status tools
 ├── auth.go        # QR generation, token verify, JWT issue/validate, middleware,
-│                  #   handoff tokens (short-lived, one-time, 5min expiry)
+│                  #   handoff tokens (15min expiry, one-time), auth logging
 ├── terminal.go    # WebSocket + pty: spawn claude in chosen dir or with --continue,
-│                  #   pipe stdin/stdout, ring buffer, multi-client broadcast
+│                  #   pipe stdin/stdout via startIO(), ring buffer, multi-client broadcast
 ├── files.go       # File browser API (read-only, allowlist, ~ expansion)
 ├── config.go      # Config loading/saving (~/.claude-remote/)
 ├── static/        # Web UI (vanilla HTML/JS/CSS, no build step)
 │   ├── index.html # Three screens: folder picker → handoff selector → chat UI
-│   ├── app.js     # WebSocket, hidden xterm.js, native scroll, Vietnamese IME,
-│   │              #   handoff URL param detection, mode selector logic
+│   ├── app.js     # WebSocket, hidden xterm.js, cell-by-cell rendering, 80ms debounce,
+│   │              #   Vietnamese IME, handoff URL params, mode selector, auth error handling
 │   └── style.css  # Mobile-first dark theme
 ├── .claude/
 │   └── skills/
@@ -72,20 +74,20 @@ Go binary (single process, two listeners when TLS active)
 ### Web UI Flow
 
 ```
-Flow A: Direct access (no URL params) — EXISTING
+Flow A: Direct access (no URL params)
   Screen 1: Folder Picker
   ├── Quick dirs: Desktop / Downloads / Documents
-  ├── Browse subdirectories
+  ├── Browse subdirectories (auth error shown if no valid cookie)
   └── "Bắt đầu Claude" → POST /api/claude/start {dir}
   ↓
   Screen 2: Chat UI (auto-attach if session already running)
 
-Flow B: Handoff (URL params ?dir=...&mode=...) — NEW
-  /handoff?token=xxx → validate → set cookie → redirect /?dir=...&mode=...
+Flow B: Handoff (URL params ?dir=...&mode=...)
+  /handoff?token=xxx → validate → clear old cookie → set new cookie → redirect
   ↓
   Screen 3: Handoff Mode Selector (if mode=choose)
-  ├── 🔗 Attach session — connect to running PTY
-  ├── 📋 Continue session — start claude --continue
+  ├── 🔗 Attach session — check status, auto-start if needed, connect WS
+  ├── 📋 Continue session — POST /api/claude/start {resume:true}, connect WS
   └── 📁 Chọn thư mục khác — go to folder picker
   ↓
   Screen 2: Chat UI
@@ -109,40 +111,40 @@ Go server (mcp.go)
 
 ### Key Design Decisions
 
-- **Hidden xterm.js** — xterm.js runs offscreen to process ANSI escape sequences; output extracted with colors and rendered in native `<pre>` for smooth mobile scrolling (xterm.js touch scroll is unusable on mobile)
-- **Cell-by-cell rendering** — `renderLine()` iterates xterm cells directly instead of using `translateToString` to avoid character/style misalignment; supports 256-color palette
-- **Debounced sync (80ms)** — output syncs at 80ms intervals instead of every animation frame to reduce flicker during streaming
-- **Logical line joining** — wrapped lines (soft wraps from terminal width) are joined into single logical lines for correct display at any screen width
-- **Native `<textarea>` for input** — supports Vietnamese IME (Telex/VNI); xterm.js keyboard breaks mobile IME composition
-- **`\r` not `\n`** — PTY expects carriage return for Enter, not line feed
-- **Dynamic terminal cols** — calculated from phone screen width at runtime, not fixed 80 cols
-- **Quick action buttons** — Claude Code needs single-key responses (y/n/Enter/Esc) impossible to type on mobile touch keyboard
-- **Session isolation** — RingBuffer cleared on new session start, output div cleared on screen switch
-- **Folder picker first** — user chooses working directory before Claude starts; Claude spawned with `cmd.Dir` set
-- **Dual listener** — HTTPS on 8822 (Tailscale cert, all interfaces) for phone; HTTP on 8823 (localhost only) for MCP. Necessary because Claude Code MCP client can't use Tailscale certs
-- **Handoff tokens** — short-lived (5 min), one-time tokens for QR scan auth. Separate from setup tokens (which are also one-time but stored differently)
-- **MCP localhost-only** — `/mcp` endpoint rejects non-loopback IPs (no JWT needed for local connections)
-- **TLS auto-detect** — searches ~/.claude-remote/, ~/Desktop, /var/run/tailscale for *.crt files; QR URL protocol matches; cookie Secure flag conditional on TLS
+- **Hidden xterm.js** — runs offscreen for ANSI processing; output extracted with colors into native `<pre>` for smooth mobile scrolling
+- **Cell-by-cell rendering** — `renderLine()` iterates xterm cells directly (not `translateToString`) to avoid character/style misalignment; supports 256-color palette
+- **Debounced sync (80ms)** — reduces flicker during Claude streaming output
+- **Logical line joining** — wrapped lines joined into single logical lines for correct display at any screen width
+- **Native `<textarea>` for input** — supports Vietnamese IME (Telex/VNI)
+- **`\r` not `\n`** — PTY expects carriage return
+- **Dynamic terminal cols** — calculated from screen width at runtime
+- **Quick action buttons** — y/n/Enter/Esc buttons for mobile (impossible on touch keyboard)
+- **Dual listener** — HTTPS:8822 for phone, HTTP:8823 for MCP. Claude Code MCP client can't use Tailscale certs
+- **Handoff tokens** — 15 min expiry, one-time, stored in memory. Separate from setup tokens
+- **SameSite=Lax cookies** — QR scan opens from camera app (cross-site navigation); SameSite=Strict cookies get dropped on redirect. `setAuthCookie()` helper clears old cookie before setting new one
+- **Static files public** — HTML/JS/CSS served without auth; only API endpoints and WebSocket require JWT. Prevents blank page when cookie expires
+- **MCP localhost-only** — `/mcp` rejects non-loopback IPs
+- **Absolute claude_path** — config.json must use absolute path (e.g., `/Users/you/.local/bin/claude`); launchd PATH may not include `~/.local/bin`
+- **startIO() shared** — both StartInDir and StartWithResume use same goroutine pattern; process exit is logged
 
 ### Network
 
-Tailscale VPN mesh — Mac + phone on same tailnet. MagicDNS for hostname. `tailscale cert` for HTTPS. Server binds `0.0.0.0:8822` (HTTPS) and `127.0.0.1:8823` (HTTP MCP). Falls back to single HTTP listener with warning if no TLS certs.
+Tailscale VPN mesh — Mac + phone on same tailnet. MagicDNS for hostname. `tailscale cert` for HTTPS (Let's Encrypt). Server binds `0.0.0.0:8822` (HTTPS) + `127.0.0.1:8823` (HTTP MCP). Falls back to single HTTP on 8822 if no TLS certs.
 
 ### Auth
 
-- First time: `setup` → QR in terminal → phone scans → JWT cookie (90 days)
-- Handoff: `/handoff` → MCP generates QR with handoff token → phone scans → JWT cookie
+- First time: `setup` → QR in terminal → phone scans `/auth/scan` → JWT cookie (90 days, SameSite=Lax)
+- Handoff: MCP generates QR → phone scans `/handoff` → old cookie cleared → new JWT cookie
 - Subsequent: cookie auto-authenticates
-- Revoke: `revoke` → new secret → all cookies invalid
-- Cookie: `Secure` + `SameSite=Strict` when TLS, `SameSite=Lax` when HTTP
-- Handoff tokens: 5 min expiry, single-use, stored in memory
+- Revoke: `revoke` → new secret → all cookies invalid → phone must re-scan QR
+- `setAuthCookie(w, jwt)` — expires old cookie first, then sets new one (fixes stale cookie issue)
 
 ### Config
 
 ```
 ~/.claude-remote/
 ├── secret.key      # JWT signing secret (256-bit)
-├── config.json     # port, allowed directories, claude binary path
+├── config.json     # port, allowed_dirs, claude_path (MUST be absolute)
 ├── sessions.json   # active device list
 ├── *.crt / *.key   # Tailscale TLS certificates
 └── server.log      # stdout/stderr from launchd service
@@ -152,22 +154,22 @@ Tailscale VPN mesh — Mac + phone on same tailnet. MagicDNS for hostname. `tail
 
 | Route | Method | Auth | Purpose |
 |-------|--------|------|---------|
-| `/auth/scan` | GET | No | QR token exchange → set JWT cookie → redirect / |
+| `/auth/scan` | GET | No | QR token exchange → clear old cookie → set JWT → redirect / |
 | `/health` | GET | No | Health check `{"status":"ok"}` |
 | `/mcp` | POST | Localhost | MCP Streamable HTTP (JSON-RPC) — handoff + status tools |
-| `/handoff` | GET | Token | Handoff token exchange → set JWT cookie → redirect with params |
-| `/api/claude/start` | POST | Yes | Start Claude in directory `{"dir":"/path","resume":bool}` |
-| `/api/claude/status` | GET | Yes | Check if Claude session running `{"running":bool}` |
-| `/api/files` | GET | Yes | List directory (supports `~/` expansion) |
-| `/api/files/read` | GET | Yes | Read file content (max 1MB) |
-| `/ws/term` | WS | Yes | Terminal WebSocket (binary I/O to pty) |
-| `/*` | GET | Yes | Static files (index.html, app.js, style.css) |
+| `/handoff` | GET | Token | Handoff token exchange → clear old cookie → set JWT → redirect |
+| `/api/claude/start` | POST | JWT | Start Claude `{"dir":"/path","resume":bool}` |
+| `/api/claude/status` | GET | JWT | Session status `{"running":bool}` |
+| `/api/files` | GET | JWT | List directory |
+| `/api/files/read` | GET | JWT | Read file content |
+| `/ws/term` | WS | JWT | Terminal WebSocket (binary I/O to pty) |
+| `/*` | GET | No | Static files (HTML/JS/CSS) |
 
 ### MCP Tools
 
 | Tool | Input | Description |
 |------|-------|-------------|
-| `handoff` | `{dir: string, mode?: "attach"\|"continue"\|"choose"}` | Generate QR code + URL for phone handoff |
+| `handoff` | `{dir: string, mode?: "attach"\|"continue"\|"choose"}` | Generate QR + URL for phone handoff (token expires 15min) |
 | `status` | `{}` | Service status, running session info, connected client count |
 
 ## Code Conventions
@@ -176,9 +178,10 @@ Tailscale VPN mesh — Mac + phone on same tailnet. MagicDNS for hostname. `tail
 - **Short receivers**: `(s *Server)`, `(a *Auth)`, `(tm *TerminalManager)`
 - **Error wrapping**: `fmt.Errorf("context: %w", err)`
 - **No frameworks**: stdlib `net/http` + minimal deps
-- **Frontend**: Vanilla JS, no build step. xterm.js from CDN (hidden, ANSI processing only).
+- **Frontend**: Vanilla JS, no build step. xterm.js from CDN (hidden, ANSI processing only)
 - **Security-first file browser**: allowlist dirs, block dotfiles, no write ops, reject `..`, symlink resolution
 - **Additive changes**: new features use new routes/screens/methods; existing behavior stays untouched
+- **Auth logging**: middleware logs denied requests with path + reason for debugging
 
 ## Dependencies
 
@@ -202,7 +205,7 @@ Test files: `auth_test.go`, `config_test.go`, `files_test.go`, `terminal_test.go
 
 ## Deployment
 
-Local Mac only. `make install` copies binary + loads launchd plist. Auto-starts on boot.
+Local Mac only. Auto-starts on boot via launchd.
 
 ```bash
 # Tailscale HTTPS setup
@@ -210,6 +213,10 @@ sudo tailscale cert <hostname>.ts.net
 sudo cp ~/Desktop/<hostname>.ts.net.* ~/.claude-remote/
 sudo chown $(whoami) ~/.claude-remote/*.key
 
-# Register MCP (one-time, user scope — persists across projects)
+# Set absolute claude path in config
+# Edit ~/.claude-remote/config.json:
+# "claude_path": "/Users/yourname/.local/bin/claude"
+
+# Register MCP (one-time, user scope — persists across all projects)
 claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```

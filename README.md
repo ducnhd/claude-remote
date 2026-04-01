@@ -4,13 +4,13 @@ Control Claude Code CLI from your phone browser, anywhere. Continue sessions sea
 
 ## What It Does
 
-Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Type `/handoff` in Claude Code to get a QR code — scan it to continue your session on phone.
+Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Ask Claude to "handoff to phone" — scan QR to continue your session.
 
 ## Features
 
-- **Session handoff** — type `/handoff` in Claude Code, scan QR, continue on phone
+- **Session handoff** — ask Claude "handoff sang điện thoại", scan QR, continue on phone
 - **Two handoff modes** — attach to running terminal (like tmux) or continue with full conversation history
-- **MCP integration** — claude-remote runs as both web server and MCP server
+- **MCP integration** — claude-remote runs as both web server and MCP server for Claude Code
 - **Folder picker** — browse Desktop/Downloads/Documents, choose working directory
 - **Chat UI** — native text input with Vietnamese IME support, colored terminal output with smooth native scrolling
 - **Quick actions** — Enter, Accept (y), Reject (n), Esc, Ctrl+C buttons for Claude's prompts
@@ -36,19 +36,50 @@ make build
 ## Install as Service
 
 ```bash
-# Install binary + launchd auto-start
-make install
+# Build binary
+make build
+
+# Copy to ~/bin (or /usr/local/bin with sudo)
+mkdir -p ~/bin
+cp claude-remote ~/bin/
+cp -r static ~/bin/static
 
 # Setup Tailscale HTTPS
 sudo tailscale cert $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+mkdir -p ~/.claude-remote
 sudo cp ~/Desktop/*.crt ~/Desktop/*.key ~/.claude-remote/
-sudo chown $(whoami) ~/.claude-remote/*.key
+sudo chown $(whoami) ~/.claude-remote/*.key ~/.claude-remote/*.crt
+
+# Install launchd service (auto-start on boot)
+# Edit the plist to point to your binary path, then:
+mkdir -p ~/Library/LaunchAgents
+cp launchd/com.claude-remote.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.claude-remote.plist
+
+# Set absolute path to claude binary in config
+cat ~/.claude-remote/config.json
+# Ensure "claude_path" points to the full path, e.g.:
+# "claude_path": "/Users/yourname/.local/bin/claude"
 
 # Generate QR for first-time phone auth
 claude-remote setup
 
-# Register MCP with Claude Code (one-time)
+# Register MCP with Claude Code (one-time, user scope)
 claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
+```
+
+### Important: launchd PATH
+
+The launchd plist must include the directory containing the `claude` binary in its PATH. Example for `~/.local/bin/claude`:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>PATH</key>
+  <string>/Users/yourname/.local/bin:/Users/yourname/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  <key>HOME</key>
+  <string>/Users/yourname</string>
+</dict>
 ```
 
 ## Session Handoff
@@ -56,20 +87,20 @@ claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 The killer feature: continue Claude Code sessions on your phone.
 
 ```
-Mac (Claude Code terminal)        Phone (browser)
+Mac (Claude Code)                  Phone (browser)
 ┌──────────────────────┐
 │ > working on feature │
-│ > /handoff           │
+│ > "handoff to phone" │
 │                      │
-│ ████████████████     │    Scan QR
-│ ████████████████     │ ──────────────►  ┌──────────────────┐
-│ ████████████████     │                  │ Tiếp tục từ      │
-│                      │                  │ máy tính          │
-│ Scan to continue     │                  │                   │
-│ on phone             │                  │ [🔗 Attach]       │
-└──────────────────────┘                  │ [📋 Continue]     │
-                                          │ [📁 New folder]   │
-                                          └──────────────────┘
+│ ████████████████     │   Scan QR
+│ ████████████████     │ ────────────►  ┌──────────────────┐
+│ ████████████████     │                │ Tiếp tục từ      │
+│                      │                │ máy tính          │
+│ Scan to continue     │                │                   │
+│ on phone             │                │ [🔗 Attach]       │
+└──────────────────────┘                │ [📋 Continue]     │
+                                        │ [📁 New folder]   │
+                                        └──────────────────┘
 ```
 
 **Attach** — connect to the same running terminal. See live output, type into the same session. Like tmux attach.
@@ -78,12 +109,23 @@ Mac (Claude Code terminal)        Phone (browser)
 
 ### How it works
 
-1. Type `/handoff` in Claude Code (uses the MCP `handoff` tool)
-2. Claude generates a QR code with a one-time token (expires 5 min)
+1. Ask Claude to "handoff to phone" (Claude calls the MCP `handoff` tool)
+2. Claude generates a QR code with a one-time token (expires 15 min)
 3. Scan with phone camera
 4. Phone opens claude-remote web UI, auto-authenticates via token
 5. Choose mode: attach or continue
 6. Start working on phone
+
+### Triggering handoff
+
+The MCP `handoff` tool is registered globally. In any Claude Code session (CLI, VS Code, Cursor), just ask:
+- "handoff sang điện thoại"
+- "tạo QR cho điện thoại"
+- "chuyển session sang phone"
+
+Claude will call the `handoff` MCP tool and display the QR code.
+
+In **Claude Code CLI**, the `/handoff` skill also works (requires the skill file in `.claude/skills/` or `~/.claude/skills/`).
 
 ## Tailscale Setup
 
@@ -138,9 +180,11 @@ Mac (Go server /mcp endpoint)
   → generates QR + handoff token
 ```
 
-Two listeners:
-- **Port 8822** (HTTPS, all interfaces) — web UI for phone
-- **Port 8823** (HTTP, localhost only) — MCP endpoint for Claude Code
+Two listeners when TLS is active:
+- **Port 8822** (HTTPS, all interfaces) — web UI for phone, static files public, API/WS protected by JWT
+- **Port 8823** (HTTP, 127.0.0.1 only) — MCP endpoint for Claude Code
+
+Without TLS certs, falls back to single HTTP listener on 8822.
 
 ## Commands
 
@@ -153,16 +197,33 @@ Two listeners:
 | `uninstall` | Unload + remove launchd plist |
 | `status` | Show running state |
 
-### Claude Code Skill
+## Troubleshooting
 
-| Command | Description |
-|---------|-------------|
-| `/handoff` | Generate QR to continue session on phone |
+### Phone shows "Chưa xác thực" or API returns 401
+Old cookie with invalid signature. Clear cookies for the site in phone browser settings, then scan a new QR code.
+
+### "Waiting for Claude to start..." forever
+Claude process failed to start. Check:
+1. `~/.claude-remote/config.json` — `claude_path` must be absolute (e.g., `/Users/you/.local/bin/claude`)
+2. `~/.claude-remote/server.log` — look for "Claude start failed" or "claude process exited"
+3. `claude auth status` — verify Claude Code is authenticated
+
+### WebSocket disconnects / red dot
+1. Check Tailscale is connected on both devices: `tailscale status`
+2. Verify health: `https://<hostname>.ts.net:8822/health`
+3. Check server logs: `tail -f ~/.claude-remote/server.log`
+
+### MCP "Failed to connect"
+MCP uses HTTP on port 8823 (localhost only). Verify:
+```bash
+curl http://127.0.0.1:8823/health
+# Should return {"status":"ok"}
+```
 
 ## Tech Stack
 
 - **Go** — single binary, no runtime deps
 - **Tailscale** — secure networking
 - **MCP** — Streamable HTTP (JSON-RPC) for Claude Code integration
-- **xterm.js** — ANSI processing (hidden)
+- **xterm.js** — ANSI processing (hidden, cell-by-cell rendering)
 - **Vanilla JS** — no framework, no build step
