@@ -1,13 +1,16 @@
 # Claude Remote
 
-Control Claude Code CLI from your phone browser, anywhere.
+Control Claude Code CLI from your phone browser, anywhere. Continue sessions seamlessly between Mac and phone.
 
 ## What It Does
 
-Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Authenticate once by scanning a QR code — then just open the URL anytime.
+Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Type `/remote` in Claude Code to get a QR code — scan it to continue your session on phone.
 
 ## Features
 
+- **Session handoff** — type `/remote` in Claude Code, scan QR, continue on phone
+- **Two handoff modes** — attach to running terminal (like tmux) or continue with full conversation history
+- **MCP integration** — claude-remote runs as both web server and MCP server
 - **Folder picker** — browse Desktop/Downloads/Documents, choose working directory
 - **Chat UI** — native text input with Vietnamese IME support, colored terminal output with smooth native scrolling
 - **Quick actions** — Enter, Accept (y), Reject (n), Esc, Ctrl+C buttons for Claude's prompts
@@ -41,9 +44,46 @@ sudo tailscale cert $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\
 sudo cp ~/Desktop/*.crt ~/Desktop/*.key ~/.claude-remote/
 sudo chown $(whoami) ~/.claude-remote/*.key
 
-# Generate QR
+# Generate QR for first-time phone auth
 claude-remote setup
+
+# Register MCP with Claude Code (one-time)
+claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```
+
+## Session Handoff
+
+The killer feature: continue Claude Code sessions on your phone.
+
+```
+Mac (Claude Code terminal)        Phone (browser)
+┌──────────────────────┐
+│ > working on feature │
+│ > /remote            │
+│                      │
+│ ████████████████     │    Scan QR
+│ ████████████████     │ ──────────────►  ┌──────────────────┐
+│ ████████████████     │                  │ Tiếp tục từ      │
+│                      │                  │ máy tính          │
+│ Scan to continue     │                  │                   │
+│ on phone             │                  │ [🔗 Attach]       │
+└──────────────────────┘                  │ [📋 Continue]     │
+                                          │ [📁 New folder]   │
+                                          └──────────────────┘
+```
+
+**Attach** — connect to the same running terminal. See live output, type into the same session. Like tmux attach.
+
+**Continue** — start a new Claude session with `--continue` flag. Gets full conversation history from the previous session in the same directory.
+
+### How it works
+
+1. Type `/remote` in Claude Code (uses the MCP `handoff` tool)
+2. Claude generates a QR code with a one-time token (expires 5 min)
+3. Scan with phone camera
+4. Phone opens claude-remote web UI, auto-authenticates via token
+5. Choose mode: attach or continue
+6. Start working on phone
 
 ## Tailscale Setup
 
@@ -69,10 +109,8 @@ tailscale status
 
 # Generate TLS cert (requires sudo)
 sudo tailscale cert <your-hostname>.ts.net
-# Example: sudo tailscale cert macbook-pro.tail1234.ts.net
 
-# Cert files appear on ~/Desktop (macOS default)
-# Copy to config dir so the server can read them:
+# Copy to config dir:
 mkdir -p ~/.claude-remote
 sudo cp ~/Desktop/<your-hostname>.ts.net.crt ~/.claude-remote/
 sudo cp ~/Desktop/<your-hostname>.ts.net.key ~/.claude-remote/
@@ -85,19 +123,24 @@ On your phone (connected to Tailscale):
 - Open Safari/Chrome → `https://<your-hostname>.ts.net:8822/health`
 - Should show `{"status":"ok","version":"0.1.0"}`
 
-If you see a certificate error, the cert wasn't loaded — check `claude-remote status` and server logs at `~/.claude-remote/server.log`.
-
 ## How It Works
 
 ```
 Phone (chat UI)
-  ↕ WebSocket over Tailscale HTTPS
+  ↕ WebSocket over Tailscale HTTPS (:8822)
 Mac (Go server)
   ↕ pseudo-terminal
 Claude Code CLI
+
+Claude Code (MCP client)
+  ↕ JSON-RPC over HTTP (:8823, localhost only)
+Mac (Go server /mcp endpoint)
+  → generates QR + handoff token
 ```
 
-The web UI uses a hidden xterm.js instance to process ANSI escape sequences, then extracts colored text into a native `<pre>` element for smooth mobile scrolling. Input goes through a native `<textarea>` that supports Vietnamese IME composition.
+Two listeners:
+- **Port 8822** (HTTPS, all interfaces) — web UI for phone
+- **Port 8823** (HTTP, localhost only) — MCP endpoint for Claude Code
 
 ## Commands
 
@@ -110,9 +153,16 @@ The web UI uses a hidden xterm.js instance to process ANSI escape sequences, the
 | `uninstall` | Unload + remove launchd plist |
 | `status` | Show running state |
 
+### Claude Code Skill
+
+| Command | Description |
+|---------|-------------|
+| `/remote` | Generate QR to continue session on phone |
+
 ## Tech Stack
 
 - **Go** — single binary, no runtime deps
 - **Tailscale** — secure networking
+- **MCP** — Streamable HTTP (JSON-RPC) for Claude Code integration
 - **xterm.js** — ANSI processing (hidden)
 - **Vanilla JS** — no framework, no build step
