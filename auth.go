@@ -83,7 +83,7 @@ func (a *Auth) GenerateHandoffToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	token := hex.EncodeToString(b)
-	a.handoffTokens[token] = now.Add(5 * time.Minute)
+	a.handoffTokens[token] = now.Add(15 * time.Minute)
 	return token
 }
 

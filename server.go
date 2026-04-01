@@ -95,7 +95,15 @@ func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" || !s.auth.ValidateHandoffToken(token) {
-		http.Error(w, `{"error":"invalid or expired handoff token"}`, http.StatusUnauthorized)
+		log.Printf("Handoff token invalid or expired from %s", r.RemoteAddr)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{background:#1a1a2e;color:#eee;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}
+.box{padding:32px}h2{color:#f87171;margin-bottom:16px}p{color:#888;margin-bottom:24px}
+a{color:#60a5fa;text-decoration:none;padding:12px 24px;border:1px solid #60a5fa;border-radius:8px;display:inline-block}</style>
+</head><body><div class="box"><h2>Token hết hạn</h2><p>QR code đã hết hạn. Gõ lại lệnh handoff trên máy tính để tạo QR mới.</p>
+<a href="/">Về trang chủ</a></div></body></html>`)
 		return
 	}
 

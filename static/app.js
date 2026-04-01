@@ -69,7 +69,13 @@
   async function browseDir(path) {
     try {
       const resp = await fetch('/api/files?path=' + encodeURIComponent(path));
-      if (resp.status === 401) { location.reload(); return; }
+      if (resp.status === 401) {
+        document.getElementById('dir-list').innerHTML =
+          '<div style="padding:20px 12px;color:#f87171;text-align:center;">' +
+          'Chưa xác thực. Quét QR code hoặc chạy <b>claude-remote setup</b> để kết nối.</div>';
+        document.getElementById('start-bar').classList.add('hidden');
+        return;
+      }
       const data = await resp.json();
       if (data.error) { alert(data.error); return; }
       selectedDir = data.path;
