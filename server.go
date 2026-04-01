@@ -132,6 +132,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
+	log.Printf("handleClaudeStart called: method=%s", r.Method)
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
@@ -165,6 +166,7 @@ func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
 	// Stop existing session if running
 	s.terminal.Stop()
 	// Start new session in the requested directory
+	log.Printf("Starting claude: dir=%s resume=%v cmd=%s", resolved, req.Resume, s.config.ClaudePath)
 	var startErr error
 	if req.Resume {
 		startErr = s.terminal.StartWithResume(resolved)
@@ -172,11 +174,13 @@ func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
 		startErr = s.terminal.StartInDir(resolved)
 	}
 	if startErr != nil {
+		log.Printf("Claude start failed: %v", startErr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error":"failed to start: %s"}`, startErr.Error())
 		return
 	}
+	log.Printf("Claude started successfully in %s", resolved)
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status":"started","dir":"%s"}`, resolved)
 }
@@ -197,9 +201,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loadTLSConfig() (*tls.Config, error) {
 	home := os.Getenv("HOME")
 	certDirs := []string{
-		s.config.DataDir,                                    // ~/.claude-remote/
-		home + "/Desktop",                                   // where tailscale cert writes by default
-		"/var/run/tailscale",                                // Linux default
+		s.config.DataDir,     // ~/.claude-remote/
+		home + "/Desktop",    // where tailscale cert writes by default
+		"/var/run/tailscale", // Linux default
 		filepath.Join(home, ".local/share/tailscale/certs"), // alt Linux
 	}
 	for _, dir := range certDirs {

@@ -92,35 +92,7 @@ func (tm *TerminalManager) StartInDir(dir string) error {
 	tm.process = c
 	tm.running = true
 
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := ptmx.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				tm.buffer.Write(data)
-				tm.broadcast(data)
-			}
-			if err != nil {
-				break
-			}
-		}
-		tm.mu.Lock()
-		tm.running = false
-		tm.mu.Unlock()
-	}()
-
-	go func() {
-		tm.process.Wait()
-		tm.mu.Lock()
-		tm.running = false
-		if tm.ptmx != nil {
-			tm.ptmx.Close()
-		}
-		tm.mu.Unlock()
-	}()
-
+	tm.startIO(ptmx)
 	return nil
 }
 
@@ -139,12 +111,19 @@ func (tm *TerminalManager) StartWithResume(dir string) error {
 	}
 	ptmx, err := pty.Start(c)
 	if err != nil {
-		return fmt.Errorf("start pty: %w", err)
+		return fmt.Errorf("start pty resume: %w", err)
 	}
 	tm.ptmx = ptmx
 	tm.process = c
 	tm.running = true
 
+	tm.startIO(ptmx)
+	return nil
+}
+
+// startIO launches goroutines to read pty output and wait for process exit.
+// Must be called with tm.mu held and tm.running == true.
+func (tm *TerminalManager) startIO(ptmx *os.File) {
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -165,7 +144,10 @@ func (tm *TerminalManager) StartWithResume(dir string) error {
 	}()
 
 	go func() {
-		tm.process.Wait()
+		err := tm.process.Wait()
+		if err != nil {
+			log.Printf("claude process exited: %v", err)
+		}
 		tm.mu.Lock()
 		tm.running = false
 		if tm.ptmx != nil {
@@ -173,8 +155,6 @@ func (tm *TerminalManager) StartWithResume(dir string) error {
 		}
 		tm.mu.Unlock()
 	}()
-
-	return nil
 }
 
 func (tm *TerminalManager) Stop() {

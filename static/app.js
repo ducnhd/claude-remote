@@ -398,17 +398,20 @@
       syncOutput();
     };
 
-    ws.onclose = () => {
+    ws.onclose = (evt) => {
       setStatus(false);
+      if (evt.code === 1006) {
+        setStatus(false, 'Mất kết nối — kiểm tra Tailscale VPN');
+      }
       reconnectTimer = setTimeout(connectWS, 3000);
     };
 
     ws.onerror = () => { if (ws) ws.close(); };
   }
 
-  function setStatus(connected) {
+  function setStatus(connected, msg) {
     document.getElementById('status-dot').className = 'dot ' + (connected ? 'connected' : 'disconnected');
-    document.getElementById('status-text').textContent = connected ? 'Đã kết nối' : 'Đang kết nối lại...';
+    document.getElementById('status-text').textContent = msg || (connected ? 'Đã kết nối' : 'Đang kết nối lại...');
   }
 
   // Handle resize
