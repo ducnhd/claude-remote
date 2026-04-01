@@ -77,15 +77,7 @@ func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// SameSite=Lax: QR scan opens from camera app (cross-site navigation)
-	http.SetCookie(w, &http.Cookie{
-		Name:     "claude-remote-auth",
-		Value:    jwt,
-		Path:     "/",
-		MaxAge:   90 * 24 * 3600,
-		HttpOnly: true,
-		Secure:   s.useTLS,
-		SameSite: http.SameSiteLaxMode,
-	})
+	s.setAuthCookie(w, jwt)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -110,15 +102,26 @@ a{color:#60a5fa;text-decoration:none;padding:12px 24px;border:1px solid #60a5fa;
 		mode = "choose"
 	}
 
-	// Issue JWT cookie — must use SameSite=Lax (not Strict) because
-	// handoff links are opened from QR scan (camera app = cross-site navigation).
-	// SameSite=Strict would cause the cookie to be dropped on the redirect.
 	deviceID := fmt.Sprintf("handoff-%d", time.Now().UnixNano())
 	jwt, err := s.auth.IssueJWT(deviceID)
 	if err != nil {
 		http.Error(w, `{"error":"failed to issue token"}`, http.StatusInternalServerError)
 		return
 	}
+	s.setAuthCookie(w, jwt)
+
+	redirect := fmt.Sprintf("/?dir=%s&mode=%s", dir, mode)
+	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// setAuthCookie clears any stale cookie variants and sets a fresh JWT cookie.
+func (s *Server) setAuthCookie(w http.ResponseWriter, jwt string) {
+	// Expire old cookie (may have been set with different SameSite value)
+	http.SetCookie(w, &http.Cookie{
+		Name: "claude-remote-auth", Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: s.useTLS,
+	})
+	// Set fresh cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "claude-remote-auth",
 		Value:    jwt,
@@ -128,9 +131,6 @@ a{color:#60a5fa;text-decoration:none;padding:12px 24px;border:1px solid #60a5fa;
 		Secure:   s.useTLS,
 		SameSite: http.SameSiteLaxMode,
 	})
-
-	redirect := fmt.Sprintf("/?dir=%s&mode=%s", dir, mode)
-	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
 func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
