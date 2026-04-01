@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Claude Remote** — a lightweight Go server that lets you control Claude Code CLI from your phone browser, anywhere over the internet. Also acts as an MCP server so Claude Code can trigger phone handoff via `/remote`.
+**Claude Remote** — a lightweight Go server that lets you control Claude Code CLI from your phone browser, anywhere over the internet. Also acts as an MCP server so Claude Code can trigger phone handoff via `/handoff`.
 
 **Core idea**: Mac runs a Go server that wraps Claude Code in a pseudo-terminal, exposes it via WebSocket, and provides a mobile-friendly chat UI. Phone connects through Tailscale VPN mesh. Claude Code connects via MCP (localhost HTTP) to generate handoff QR codes. Auth via one-time QR code scan, persistent JWT cookie. Auto-starts on Mac boot via launchd.
 
@@ -41,7 +41,7 @@ Note: MCP uses port 8823 (HTTP, localhost only). The main web UI uses port 8822 
 
 | Command | Description |
 |---------|-------------|
-| `/remote` | Generate QR to continue session on phone |
+| `/handoff` | Generate QR to continue session on phone |
 
 ## Architecture
 
@@ -64,7 +64,7 @@ Go binary (single process, two listeners when TLS active)
 │   └── style.css  # Mobile-first dark theme
 ├── .claude/
 │   └── skills/
-│       └── remote.md  # /remote skill — calls MCP handoff tool
+│       └── remote.md  # /handoff skill — calls MCP handoff tool
 └── launchd/
     └── com.claude-remote.plist
 ```
@@ -131,7 +131,7 @@ Tailscale VPN mesh — Mac + phone on same tailnet. MagicDNS for hostname. `tail
 ### Auth
 
 - First time: `setup` → QR in terminal → phone scans → JWT cookie (90 days)
-- Handoff: `/remote` → MCP generates QR with handoff token → phone scans → JWT cookie
+- Handoff: `/handoff` → MCP generates QR with handoff token → phone scans → JWT cookie
 - Subsequent: cookie auto-authenticates
 - Revoke: `revoke` → new secret → all cookies invalid
 - Cookie: `Secure` + `SameSite=Strict` when TLS, `SameSite=Lax` when HTTP

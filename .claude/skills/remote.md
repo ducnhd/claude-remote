@@ -1,10 +1,10 @@
 ---
-name: remote
+name: handoff
 description: Generate QR code to continue current Claude session on phone via claude-remote
 user-invocable: true
 ---
 
-When the user invokes /remote, follow these steps:
+When the user invokes /handoff, follow these steps:
 
 1. Call the MCP tool `status` from the `claude-remote` server to check if the service is running.
    - If the service is not reachable, tell the user: "claude-remote service is not running. Start it with: claude-remote serve"

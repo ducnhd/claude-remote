@@ -4,11 +4,11 @@ Control Claude Code CLI from your phone browser, anywhere. Continue sessions sea
 
 ## What It Does
 
-Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Type `/remote` in Claude Code to get a QR code — scan it to continue your session on phone.
+Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Type `/handoff` in Claude Code to get a QR code — scan it to continue your session on phone.
 
 ## Features
 
-- **Session handoff** — type `/remote` in Claude Code, scan QR, continue on phone
+- **Session handoff** — type `/handoff` in Claude Code, scan QR, continue on phone
 - **Two handoff modes** — attach to running terminal (like tmux) or continue with full conversation history
 - **MCP integration** — claude-remote runs as both web server and MCP server
 - **Folder picker** — browse Desktop/Downloads/Documents, choose working directory
@@ -59,7 +59,7 @@ The killer feature: continue Claude Code sessions on your phone.
 Mac (Claude Code terminal)        Phone (browser)
 ┌──────────────────────┐
 │ > working on feature │
-│ > /remote            │
+│ > /handoff           │
 │                      │
 │ ████████████████     │    Scan QR
 │ ████████████████     │ ──────────────►  ┌──────────────────┐
@@ -78,7 +78,7 @@ Mac (Claude Code terminal)        Phone (browser)
 
 ### How it works
 
-1. Type `/remote` in Claude Code (uses the MCP `handoff` tool)
+1. Type `/handoff` in Claude Code (uses the MCP `handoff` tool)
 2. Claude generates a QR code with a one-time token (expires 5 min)
 3. Scan with phone camera
 4. Phone opens claude-remote web UI, auto-authenticates via token
@@ -157,7 +157,7 @@ Two listeners:
 
 | Command | Description |
 |---------|-------------|
-| `/remote` | Generate QR to continue session on phone |
+| `/handoff` | Generate QR to continue session on phone |
 
 ## Tech Stack
 
