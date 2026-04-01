@@ -36,33 +36,32 @@ func NewServer(cfg *Config, auth *Auth) *Server {
 }
 
 func (s *Server) registerRoutes() {
+	// Public routes (no auth)
 	s.mux.HandleFunc("/auth/scan", s.handleAuthScan)
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/mcp", s.handleMCP)
 	s.mux.HandleFunc("/handoff", s.handleHandoff)
 
-	protected := http.NewServeMux()
-	protected.HandleFunc("/ws/term", s.terminal.WebSocketHandler())
-	protected.HandleFunc("/api/claude/start", s.handleClaudeStart)
-	protected.HandleFunc("/api/claude/status", s.handleClaudeStatus)
-	protected.HandleFunc("/api/files", s.files.HandleList)
-	protected.HandleFunc("/api/files/read", s.files.HandleRead)
+	// Protected API + WebSocket routes (require JWT)
+	s.mux.Handle("/ws/term", s.auth.Middleware(http.HandlerFunc(s.terminal.WebSocketHandler())))
+	s.mux.Handle("/api/claude/start", s.auth.Middleware(http.HandlerFunc(s.handleClaudeStart)))
+	s.mux.Handle("/api/claude/status", s.auth.Middleware(http.HandlerFunc(s.handleClaudeStatus)))
+	s.mux.Handle("/api/files", s.auth.Middleware(http.HandlerFunc(s.files.HandleList)))
+	s.mux.Handle("/api/files/read", s.auth.Middleware(http.HandlerFunc(s.files.HandleRead)))
 
+	// Static files (public — auth checked by JS calling protected APIs)
 	staticDir := filepath.Join(execDir(), "static")
 	if _, err := os.Stat(staticDir); err != nil {
-		// Fallback to current working directory (for go run)
 		if wd, wdErr := os.Getwd(); wdErr == nil {
 			staticDir = filepath.Join(wd, "static")
 		}
 	}
 	if _, err := os.Stat(staticDir); err == nil {
 		log.Printf("Serving static files from %s", staticDir)
-		protected.Handle("/", http.FileServer(http.Dir(staticDir)))
+		s.mux.Handle("/", http.FileServer(http.Dir(staticDir)))
 	} else {
 		log.Printf("WARNING: static directory not found")
 	}
-
-	s.mux.Handle("/", s.auth.Middleware(protected))
 }
 
 func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {

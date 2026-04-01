@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -143,10 +144,12 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("claude-remote-auth")
 		if err != nil {
+			log.Printf("AUTH DENIED %s %s — no cookie: %v", r.Method, r.URL.Path, err)
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 		if _, err := a.VerifyJWT(cookie.Value); err != nil {
+			log.Printf("AUTH DENIED %s %s — invalid JWT: %v", r.Method, r.URL.Path, err)
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
