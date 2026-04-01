@@ -54,15 +54,19 @@
   }
 
   // --- Folder Picker ---
+  let pickerInitialized = false;
   function initPicker() {
     const container = document.getElementById('quick-dirs');
-    quickDirs.forEach(d => {
-      const btn = document.createElement('button');
-      btn.className = 'quick-btn';
-      btn.textContent = d.icon + ' ' + d.name;
-      btn.addEventListener('click', () => browseDir('~/' + d.name));
-      container.appendChild(btn);
-    });
+    if (!pickerInitialized) {
+      quickDirs.forEach(d => {
+        const btn = document.createElement('button');
+        btn.className = 'quick-btn';
+        btn.textContent = d.icon + ' ' + d.name;
+        btn.addEventListener('click', () => browseDir('~/' + d.name));
+        container.appendChild(btn);
+      });
+      pickerInitialized = true;
+    }
     browseDir('~/Desktop');
   }
 
