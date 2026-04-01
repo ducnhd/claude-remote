@@ -76,10 +76,7 @@ func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to issue token"}`, http.StatusInternalServerError)
 		return
 	}
-	sameSite := http.SameSiteLaxMode
-	if s.useTLS {
-		sameSite = http.SameSiteStrictMode
-	}
+	// SameSite=Lax: QR scan opens from camera app (cross-site navigation)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "claude-remote-auth",
 		Value:    jwt,
@@ -87,7 +84,7 @@ func (s *Server) handleAuthScan(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   90 * 24 * 3600,
 		HttpOnly: true,
 		Secure:   s.useTLS,
-		SameSite: sameSite,
+		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -113,16 +110,14 @@ a{color:#60a5fa;text-decoration:none;padding:12px 24px;border:1px solid #60a5fa;
 		mode = "choose"
 	}
 
-	// Issue JWT cookie
+	// Issue JWT cookie — must use SameSite=Lax (not Strict) because
+	// handoff links are opened from QR scan (camera app = cross-site navigation).
+	// SameSite=Strict would cause the cookie to be dropped on the redirect.
 	deviceID := fmt.Sprintf("handoff-%d", time.Now().UnixNano())
 	jwt, err := s.auth.IssueJWT(deviceID)
 	if err != nil {
 		http.Error(w, `{"error":"failed to issue token"}`, http.StatusInternalServerError)
 		return
-	}
-	sameSite := http.SameSiteLaxMode
-	if s.useTLS {
-		sameSite = http.SameSiteStrictMode
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "claude-remote-auth",
@@ -131,7 +126,7 @@ a{color:#60a5fa;text-decoration:none;padding:12px 24px;border:1px solid #60a5fa;
 		MaxAge:   90 * 24 * 3600,
 		HttpOnly: true,
 		Secure:   s.useTLS,
-		SameSite: sameSite,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	redirect := fmt.Sprintf("/?dir=%s&mode=%s", dir, mode)
