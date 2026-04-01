@@ -504,10 +504,35 @@
     showScreen('screen-handoff');
   }
 
-  function attachToSession(dir) {
+  async function attachToSession(dir) {
     showScreen('screen-chat');
     document.getElementById('chat-dir').textContent = dir;
     document.getElementById('output-text').innerHTML = '';
+    // Check if session is running before attaching
+    try {
+      const resp = await fetch('/api/claude/status');
+      if (resp.status === 401) {
+        alert('Chưa xác thực. Quét lại QR code.');
+        showScreen('screen-picker');
+        return;
+      }
+      const data = await resp.json();
+      if (!data.running) {
+        // No session running — start one instead
+        const startResp = await fetch('/api/claude/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir: dir, resume: false })
+        });
+        if (startResp.status === 401) {
+          alert('Chưa xác thực. Quét lại QR code.');
+          showScreen('screen-picker');
+          return;
+        }
+      }
+    } catch (e) {
+      // Network error — try connecting anyway
+    }
     initTerminal();
     connectWS();
   }
@@ -522,6 +547,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dir: dir, resume: true })
       });
+      if (resp.status === 401) {
+        alert('Chưa xác thực. Quét lại QR code.');
+        showScreen('screen-picker');
+        return;
+      }
       const data = await resp.json();
       if (data.error) {
         alert('Lỗi: ' + data.error);
