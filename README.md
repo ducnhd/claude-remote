@@ -8,11 +8,11 @@ Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phon
 
 ## Features
 
-- **Session handoff** — ask Claude "handoff sang điện thoại", scan QR, continue on phone
+- **Session handoff** — ask Claude "handoff to phone", scan QR, continue on phone
 - **Two handoff modes** — attach to running terminal (like tmux) or continue with full conversation history
 - **MCP integration** — claude-remote runs as both web server and MCP server for Claude Code
 - **Folder picker** — browse Desktop/Downloads/Documents, choose working directory
-- **Chat UI** — native text input with Vietnamese IME support, colored terminal output with smooth native scrolling
+- **Chat UI** — native text input with IME support, colored terminal output with smooth native scrolling
 - **Quick actions** — Enter, Accept (y), Reject (n), Esc, Ctrl+C buttons for Claude's prompts
 - **QR auth** — scan once, JWT cookie lasts 90 days
 - **Tailscale HTTPS** — encrypted VPN mesh, no port forwarding needed
@@ -94,8 +94,8 @@ Mac (Claude Code)                  Phone (browser)
 │                      │
 │ ████████████████     │   Scan QR
 │ ████████████████     │ ────────────►  ┌──────────────────┐
-│ ████████████████     │                │ Tiếp tục từ      │
-│                      │                │ máy tính          │
+│ ████████████████     │                │ Continue from     │
+│                      │                │ computer          │
 │ Scan to continue     │                │                   │
 │ on phone             │                │ [🔗 Attach]       │
 └──────────────────────┘                │ [📋 Continue]     │
@@ -119,9 +119,9 @@ Mac (Claude Code)                  Phone (browser)
 ### Triggering handoff
 
 The MCP `handoff` tool is registered globally. In any Claude Code session (CLI, VS Code, Cursor), just ask:
-- "handoff sang điện thoại"
-- "tạo QR cho điện thoại"
-- "chuyển session sang phone"
+- "handoff to phone"
+- "generate QR for phone"
+- "transfer session to phone"
 
 Claude will call the `handoff` MCP tool and display the QR code.
 
@@ -199,7 +199,7 @@ Without TLS certs, falls back to single HTTP listener on 8822.
 
 ## Troubleshooting
 
-### Phone shows "Chưa xác thực" or API returns 401
+### Phone shows "Not authenticated" or API returns 401
 Old cookie with invalid signature. Clear cookies for the site in phone browser settings, then scan a new QR code.
 
 ### "Waiting for Claude to start..." forever

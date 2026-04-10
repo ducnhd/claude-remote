@@ -40,8 +40,8 @@ MCP uses port 8823 (HTTP, localhost only). The main web UI uses port 8822 (HTTPS
 ### Triggering Handoff
 
 MCP tools are available globally in Claude Code. Just ask:
-- "handoff sang điện thoại"
-- "tạo QR cho điện thoại"
+- "handoff to phone"
+- "generate QR for phone"
 
 Claude calls the `handoff` MCP tool and displays QR. In Claude Code CLI, `/handoff` skill also works.
 
@@ -78,7 +78,7 @@ Flow A: Direct access (no URL params)
   Screen 1: Folder Picker
   ├── Quick dirs: Desktop / Downloads / Documents
   ├── Browse subdirectories (auth error shown if no valid cookie)
-  └── "Bắt đầu Claude" → POST /api/claude/start {dir}
+  └── "Start Claude" → POST /api/claude/start {dir}
   ↓
   Screen 2: Chat UI (auto-attach if session already running)
 
@@ -88,7 +88,7 @@ Flow B: Handoff (URL params ?dir=...&mode=...)
   Screen 3: Handoff Mode Selector (if mode=choose)
   ├── 🔗 Attach session — check status, auto-start if needed, connect WS
   ├── 📋 Continue session — POST /api/claude/start {resume:true}, connect WS
-  └── 📁 Chọn thư mục khác — go to folder picker
+  └── 📁 Choose another folder — go to folder picker
   ↓
   Screen 2: Chat UI
 ```
