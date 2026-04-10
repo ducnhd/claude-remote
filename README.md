@@ -227,3 +227,13 @@ curl http://127.0.0.1:8823/health
 - **MCP** — Streamable HTTP (JSON-RPC) for Claude Code integration
 - **xterm.js** — ANSI processing (hidden, cell-by-cell rendering)
 - **Vanilla JS** — no framework, no build step
+
+## Support
+
+If you find this useful, consider buying me a coffee:
+
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal)](https://paypal.me/ducnhd)
+
+## License
+
+[MIT](LICENSE)
