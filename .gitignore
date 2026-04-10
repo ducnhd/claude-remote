@@ -1,6 +1,22 @@
+# Binary
 claude-remote
 *.exe
-.superpowers/
+
+# TLS certificates and keys
+*.crt
+*.key
+*.pem
+
+# Local config and secrets
 .claude-remote/
+.claude/settings.local.json
+
+# Internal dev tools
+.superpowers/
+docs/superpowers/
+
+# Logs
 *.log
+
+# OS
 .DS_Store

@@ -1,4 +1,4 @@
-module claude-remote
+module github.com/ducnhd/claude-remote
 
 go 1.25.0
 

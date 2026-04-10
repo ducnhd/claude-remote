@@ -180,9 +180,9 @@ claude-remote status     # Show running state, port, connected devices
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/Users/datducnguyenhuu/.claude-remote/server.log</string>
+  <string>__HOME__/.claude-remote/server.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/datducnguyenhuu/.claude-remote/server.log</string>
+  <string>__HOME__/.claude-remote/server.log</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

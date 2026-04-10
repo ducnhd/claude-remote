@@ -14,7 +14,7 @@
 make build          # Build binary
 make run            # Build + run locally
 make test           # Run all tests
-make install        # Build + install to /usr/local/bin + load launchd
+make install        # Build + install to ~/bin + load launchd (auto-templates plist)
 make uninstall      # Unload launchd + remove binary
 ```
 

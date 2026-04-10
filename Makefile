@@ -1,5 +1,5 @@
 BINARY=claude-remote
-INSTALL_PATH=/usr/local/bin/$(BINARY)
+INSTALL_PATH=$(HOME)/bin/$(BINARY)
 PLIST_NAME=com.claude-remote.plist
 PLIST_SRC=launchd/$(PLIST_NAME)
 PLIST_DST=$(HOME)/Library/LaunchAgents/$(PLIST_NAME)
@@ -22,9 +22,10 @@ clean:
 	rm -f $(BINARY)
 
 install: build
+	mkdir -p $(HOME)/bin
 	cp $(BINARY) $(INSTALL_PATH)
 	mkdir -p $(HOME)/Library/LaunchAgents
-	cp $(PLIST_SRC) $(PLIST_DST)
+	sed 's|__HOME__|$(HOME)|g' $(PLIST_SRC) > $(PLIST_DST)
 	launchctl load $(PLIST_DST)
 	@echo "Installed. Run 'claude-remote setup' if first time."
 

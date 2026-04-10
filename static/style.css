@@ -79,13 +79,18 @@ header {
 #output-scroll {
   flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: 8px 12px;
+  overscroll-behavior: contain;
 }
 #output-text {
   font-family: Menlo, Monaco, 'Courier New', monospace;
   font-size: 13px; line-height: 1.5; color: #e0e0e0;
-  white-space: pre-wrap; word-break: break-word;
   margin: 0; padding: 0;
   letter-spacing: 0.01em;
+  contain: content;
+}
+.output-line {
+  white-space: pre-wrap; word-break: break-word;
+  min-height: 1.5em;
 }
 
 #quick-actions {

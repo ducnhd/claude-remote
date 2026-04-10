@@ -180,8 +180,8 @@
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (term) { term.dispose(); term = null; }
     document.getElementById('output-text').innerHTML = '';
-    lastRenderedLineCount = 0;
     renderedLines = [];
+    lineElements = [];
   }
 
   // --- Terminal (hidden xterm for escape sequence processing) ---
@@ -195,8 +195,8 @@
     });
     term.open(document.getElementById('xterm-hidden'));
     // Reset incremental render state
-    lastRenderedLineCount = 0;
     renderedLines = [];
+    lineElements = [];
   }
 
   // ANSI color map
@@ -285,8 +285,8 @@
   }
 
   // State for incremental rendering
-  let lastRenderedLineCount = 0;
   let renderedLines = []; // cached HTML per logical line
+  let lineElements = [];  // DOM elements per logical line
 
   // Build logical lines from xterm buffer
   // A logical line = one or more physical lines (wrapped lines joined)
@@ -310,25 +310,21 @@
       }
 
       if (line.isWrapped) {
-        // Continuation of previous line — append without newline
         current += renderLine(line);
       } else {
-        // New logical line — push previous and start new
         if (i > 0) {
           logical.push(current);
         }
         current = renderLine(line);
       }
     }
-    // Push the last line (including cursor line)
     logical.push(current);
     return logical;
   }
 
-  // Sync xterm buffer to visible output — incremental updates
+  // Sync xterm buffer to visible output — true incremental DOM updates
   function syncOutput() {
     if (syncTimer) return;
-    // Debounce: 80ms during streaming, rAF for single updates
     syncTimer = setTimeout(() => {
       syncTimer = null;
       if (!term) return;
@@ -338,51 +334,73 @@
       const wasNearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80;
 
       const logicalLines = getLogicalLines();
-      const lineCount = logicalLines.length;
+      const newCount = logicalLines.length;
+      const oldCount = renderedLines.length;
 
-      // Find how many lines changed from the top (cursor line always re-renders)
-      // For efficiency, only check from the last few lines back
-      let firstDirty = Math.max(0, renderedLines.length - 2);
-      for (let i = firstDirty; i < Math.min(renderedLines.length, lineCount); i++) {
+      // Remove excess lines if buffer shrunk (screen clear etc)
+      while (lineElements.length > newCount) {
+        const el = lineElements.pop();
+        el.remove();
+      }
+      renderedLines.length = Math.min(renderedLines.length, newCount);
+
+      // Update changed existing lines (only check last 3 + any earlier diffs)
+      const checkFrom = Math.max(0, Math.min(oldCount, newCount) - 3);
+      for (let i = checkFrom; i < Math.min(oldCount, newCount); i++) {
         if (renderedLines[i] !== logicalLines[i]) {
-          firstDirty = i;
-          break;
+          lineElements[i].innerHTML = logicalLines[i];
+          renderedLines[i] = logicalLines[i];
         }
       }
 
-      if (firstDirty === 0 && renderedLines.length === 0) {
-        // Full render (first time or after clear)
-        outputEl.innerHTML = logicalLines.join('\n');
-      } else if (lineCount < renderedLines.length) {
-        // Lines removed (screen clear or similar) — full re-render
-        outputEl.innerHTML = logicalLines.join('\n');
-      } else if (firstDirty >= renderedLines.length - 2 && lineCount >= renderedLines.length) {
-        // Common case: only new/changed lines at the bottom
-        // Re-render last 2 old lines + all new lines (handles cursor line update)
-        const startLine = Math.max(0, renderedLines.length - 2);
-        const newContent = logicalLines.slice(startLine).join('\n');
-
-        // Remove last 2 lines worth of text from output and append new
-        const textContent = outputEl.textContent || '';
-        // Faster: just set full content if output is small
-        if (lineCount < 200) {
-          outputEl.innerHTML = logicalLines.join('\n');
-        } else {
-          // For large outputs, rebuild only tail (keep DOM stable)
-          outputEl.innerHTML = logicalLines.join('\n');
+      // Append new lines
+      if (newCount > lineElements.length) {
+        const frag = document.createDocumentFragment();
+        for (let i = lineElements.length; i < newCount; i++) {
+          const div = document.createElement('div');
+          div.className = 'output-line';
+          div.innerHTML = logicalLines[i];
+          frag.appendChild(div);
+          lineElements.push(div);
+          renderedLines.push(logicalLines[i]);
         }
-      } else {
-        // Major change in the middle — full re-render
-        outputEl.innerHTML = logicalLines.join('\n');
+        outputEl.appendChild(frag);
       }
-
-      renderedLines = logicalLines.slice();
-      lastRenderedLineCount = lineCount;
 
       if (wasNearBottom) {
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
-    }, 80);
+    }, 60);
+  }
+
+  // Force full re-sync (used on visibility change, resize)
+  function forceSyncOutput() {
+    if (!term) return;
+    const outputEl = document.getElementById('output-text');
+    const scrollEl = document.getElementById('output-scroll');
+    const wasNearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80;
+
+    const logicalLines = getLogicalLines();
+
+    // Clear and rebuild all line elements
+    outputEl.innerHTML = '';
+    lineElements = [];
+    renderedLines = [];
+
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < logicalLines.length; i++) {
+      const div = document.createElement('div');
+      div.className = 'output-line';
+      div.innerHTML = logicalLines[i];
+      frag.appendChild(div);
+      lineElements.push(div);
+      renderedLines.push(logicalLines[i]);
+    }
+    outputEl.appendChild(frag);
+
+    if (wasNearBottom) {
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
   }
 
   // --- WebSocket ---
@@ -424,15 +442,30 @@
     document.getElementById('status-text').textContent = msg || (connected ? 'Đã kết nối' : 'Đang kết nối lại...');
   }
 
-  // Handle resize
+  // Handle resize (debounced to avoid rapid re-renders during keyboard show/hide)
+  let resizeTimer = null;
   window.addEventListener('resize', () => {
-    const newCols = calcCols();
-    if (newCols !== termCols && term) {
-      termCols = newCols;
-      term.resize(termCols, 50);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', rows: 50, cols: termCols }));
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      const newCols = calcCols();
+      if (newCols !== termCols && term) {
+        termCols = newCols;
+        term.resize(termCols, 50);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', rows: 50, cols: termCols }));
+        }
+        // Force re-render after resize reflows xterm buffer
+        forceSyncOutput();
       }
+    }, 250);
+  });
+
+  // Handle app switch: re-sync output when returning to app
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && term) {
+      // Small delay to let browser finish layout
+      setTimeout(forceSyncOutput, 100);
     }
   });
 
