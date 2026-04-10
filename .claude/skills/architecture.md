@@ -27,7 +27,7 @@ Claude Remote is a Go HTTP server that:
 - Handles terminal resize via JSON control messages `{"type":"resize","rows":N,"cols":N}`
 
 ### Web UI (static/)
-- **Screen 1: Folder Picker** — quick-access Desktop/Downloads/Documents buttons, browse subdirectories, "Bắt đầu Claude" starts session
+- **Screen 1: Folder Picker** — quick-access Desktop/Downloads/Documents buttons, browse subdirectories, "Start Claude" starts session
 - **Screen 2: Chat UI** — output area + quick actions + text input
 - **Hidden xterm.js** — processes ANSI escape sequences offscreen; `serializeBuffer()` extracts colored HTML per-cell (fg/bg color, bold, italic, underline, dim)
 - **Native scroll** — `<pre>` in `overflow-y:auto` div with `-webkit-overflow-scrolling:touch`

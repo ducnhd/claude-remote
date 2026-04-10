@@ -15,4 +15,4 @@ When the user invokes /handoff, follow these steps:
 
 3. Display the QR code result exactly as returned (it contains ASCII art QR + URL).
 
-4. Tell the user: "Quét QR bằng điện thoại để tiếp tục session. Token hết hạn sau 5 phút."
+4. Tell the user: "Scan the QR code with your phone to continue this session. Token expires in 5 minutes."

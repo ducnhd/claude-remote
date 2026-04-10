@@ -76,7 +76,7 @@
       if (resp.status === 401) {
         document.getElementById('dir-list').innerHTML =
           '<div style="padding:20px 12px;color:#f87171;text-align:center;">' +
-          'Chưa xác thực. Quét QR code hoặc chạy <b>claude-remote setup</b> để kết nối.</div>';
+          'Not authenticated. Scan QR code or run <b>claude-remote setup</b> to connect.</div>';
         document.getElementById('start-bar').classList.add('hidden');
         return;
       }
@@ -116,7 +116,7 @@
     if (dirs.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding: 20px 12px; color: #666; text-align: center;';
-      empty.textContent = 'Không có thư mục con';
+      empty.textContent = 'No subdirectories';
       el.appendChild(empty);
       return;
     }
@@ -135,7 +135,7 @@
   document.getElementById('btn-start').addEventListener('click', async () => {
     if (!selectedDir) return;
     const btn = document.getElementById('btn-start');
-    btn.textContent = 'Đang khởi động...';
+    btn.textContent = 'Starting...';
     btn.disabled = true;
 
     try {
@@ -146,8 +146,8 @@
       });
       const data = await resp.json();
       if (data.error) {
-        alert('Lỗi: ' + data.error);
-        btn.textContent = 'Bắt đầu Claude';
+        alert('Error: ' + data.error);
+        btn.textContent = 'Start Claude';
         btn.disabled = false;
         return;
       }
@@ -158,18 +158,18 @@
       initTerminal();
       connectWS();
     } catch (e) {
-      alert('Lỗi kết nối: ' + e.message);
-      btn.textContent = 'Bắt đầu Claude';
+      alert('Connection error: ' + e.message);
+      btn.textContent = 'Start Claude';
       btn.disabled = false;
     }
   });
 
   // --- Back button ---
   document.getElementById('btn-back').addEventListener('click', () => {
-    if (confirm('Quay lại sẽ dừng phiên Claude hiện tại. Tiếp tục?')) {
+    if (confirm('Going back will stop the current Claude session. Continue?')) {
       cleanup();
       showScreen('screen-picker');
-      document.getElementById('btn-start').textContent = 'Bắt đầu Claude';
+      document.getElementById('btn-start').textContent = 'Start Claude';
       document.getElementById('btn-start').disabled = false;
     }
   });
@@ -429,7 +429,7 @@
     ws.onclose = (evt) => {
       setStatus(false);
       if (evt.code === 1006) {
-        setStatus(false, 'Mất kết nối — kiểm tra Tailscale VPN');
+        setStatus(false, 'Disconnected — check Tailscale VPN');
       }
       reconnectTimer = setTimeout(connectWS, 3000);
     };
@@ -439,7 +439,7 @@
 
   function setStatus(connected, msg) {
     document.getElementById('status-dot').className = 'dot ' + (connected ? 'connected' : 'disconnected');
-    document.getElementById('status-text').textContent = msg || (connected ? 'Đã kết nối' : 'Đang kết nối lại...');
+    document.getElementById('status-text').textContent = msg || (connected ? 'Connected' : 'Reconnecting...');
   }
 
   // Handle resize (debounced to avoid rapid re-renders during keyboard show/hide)
@@ -549,7 +549,7 @@
     try {
       const resp = await fetch('/api/claude/status');
       if (resp.status === 401) {
-        alert('Chưa xác thực. Quét lại QR code.');
+        alert('Not authenticated. Please scan QR code again.');
         showScreen('screen-picker');
         return;
       }
@@ -562,7 +562,7 @@
           body: JSON.stringify({ dir: dir, resume: false })
         });
         if (startResp.status === 401) {
-          alert('Chưa xác thực. Quét lại QR code.');
+          alert('Not authenticated. Please scan QR code again.');
           showScreen('screen-picker');
           return;
         }
@@ -585,18 +585,18 @@
         body: JSON.stringify({ dir: dir, resume: true })
       });
       if (resp.status === 401) {
-        alert('Chưa xác thực. Quét lại QR code.');
+        alert('Not authenticated. Please scan QR code again.');
         showScreen('screen-picker');
         return;
       }
       const data = await resp.json();
       if (data.error) {
-        alert('Lỗi: ' + data.error);
+        alert('Error: ' + data.error);
         showScreen('screen-picker');
         return;
       }
     } catch (e) {
-      alert('Lỗi kết nối: ' + e.message);
+      alert('Connection error: ' + e.message);
       showScreen('screen-picker');
       return;
     }
@@ -624,7 +624,7 @@
     fetch('/api/claude/status').then(r => r.json()).then(data => {
       if (data.running) {
         showScreen('screen-chat');
-        document.getElementById('chat-dir').textContent = 'Phiên đang chạy';
+        document.getElementById('chat-dir').textContent = 'Session running';
         initTerminal();
         connectWS();
       }

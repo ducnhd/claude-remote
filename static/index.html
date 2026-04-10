@@ -12,40 +12,40 @@
   <header id="header">
     <span id="status-dot" class="dot disconnected"></span>
     <span>Claude Remote</span>
-    <span id="status-text">Chưa kết nối</span>
+    <span id="status-text">Not connected</span>
   </header>
 
   <!-- Screen 1: Folder Picker -->
   <div id="screen-picker" class="screen active">
-    <div class="picker-title">Chọn thư mục làm việc</div>
+    <div class="picker-title">Choose working directory</div>
     <div id="quick-dirs"></div>
     <div id="dir-breadcrumb"></div>
     <div id="dir-list"></div>
     <div id="start-bar" class="hidden">
       <div id="selected-dir"></div>
-      <button id="btn-start">Bắt đầu Claude</button>
+      <button id="btn-start">Start Claude</button>
     </div>
   </div>
 
   <!-- Screen 3: Handoff Mode Selector (NEW) -->
   <div id="screen-handoff" class="screen">
-    <div class="picker-title">Tiếp tục từ máy tính</div>
+    <div class="picker-title">Continue from computer</div>
     <div id="handoff-dir" style="padding: 8px 12px; font-size: 13px; color: #888;"></div>
     <div id="handoff-options">
       <button id="btn-attach" class="handoff-btn">
         <span class="handoff-icon">🔗</span>
         <span class="handoff-label">Attach session</span>
-        <span class="handoff-desc">Kết nối vào terminal đang chạy trên máy tính</span>
+        <span class="handoff-desc">Connect to the running terminal on your computer</span>
       </button>
       <button id="btn-continue" class="handoff-btn">
         <span class="handoff-icon">📋</span>
         <span class="handoff-label">Continue session</span>
-        <span class="handoff-desc">Tạo session mới với đầy đủ lịch sử hội thoại</span>
+        <span class="handoff-desc">Start a new session with full conversation history</span>
       </button>
       <button id="btn-new-folder" class="handoff-btn">
         <span class="handoff-icon">📁</span>
-        <span class="handoff-label">Chọn thư mục khác</span>
-        <span class="handoff-desc">Bỏ qua, về trang chọn thư mục</span>
+        <span class="handoff-label">Choose another folder</span>
+        <span class="handoff-desc">Skip and go to folder picker</span>
       </button>
     </div>
   </div>
@@ -53,7 +53,7 @@
   <!-- Screen 2: Claude Chat -->
   <div id="screen-chat" class="screen">
     <div id="chat-toolbar">
-      <button id="btn-back" title="Chọn thư mục khác">←</button>
+      <button id="btn-back" title="Choose another folder">←</button>
       <span id="chat-dir"></span>
     </div>
     <div id="xterm-hidden"></div>
@@ -62,15 +62,15 @@
     </div>
     <div id="quick-actions">
       <button class="action-btn enter" data-key="\r">Enter ↵</button>
-      <button class="action-btn accept" data-key="y">✓ Chấp nhận</button>
-      <button class="action-btn reject" data-key="n">✗ Từ chối</button>
+      <button class="action-btn accept" data-key="y">✓ Accept</button>
+      <button class="action-btn reject" data-key="n">✗ Reject</button>
       <button class="action-btn" data-key="\x1b">Esc</button>
       <button class="action-btn" data-key="\x03">Ctrl+C</button>
     </div>
     <div id="input-bar">
-      <textarea id="chat-input" placeholder="Nhập tin nhắn tiếng Việt..." rows="1"></textarea>
-      <button id="btn-send">Gửi</button>
-      <button id="btn-hide-kb" title="Ẩn bàn phím">⌨↓</button>
+      <textarea id="chat-input" placeholder="Type a message..." rows="1"></textarea>
+      <button id="btn-send">Send</button>
+      <button id="btn-hide-kb" title="Hide keyboard">⌨↓</button>
     </div>
   </div>
 
