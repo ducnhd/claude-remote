@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,5 +117,76 @@ func TestTerminalWebSocket(t *testing.T) {
 	}
 	if !strings.Contains(string(msg), "test input") {
 		t.Errorf("want echo of 'test input', got %q", string(msg))
+	}
+}
+
+// Regression: the pty reader and the request goroutine both write to the
+// same websocket connection. Without a per-connection write mutex,
+// gorilla/websocket panics with "concurrent write to websocket connection".
+func TestWebSocketConcurrentWrites(t *testing.T) {
+	tm := NewTerminalManager("sh", []string{"-c", "for i in $(seq 1 200); do echo line-$i; done; sleep 1"})
+	srv := httptest.NewServer(http.HandlerFunc(tm.WebSocketHandler()))
+	defer srv.Close()
+	defer tm.Stop()
+
+	if err := tm.StartInDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/term", nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			for j := 0; j < 5; j++ {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// Regression: a restart must not let the previous session's exit goroutine
+// tear down the new pty.
+func TestRestartKeepsNewSessionAlive(t *testing.T) {
+	dir := t.TempDir()
+	tm := NewTerminalManager("sh", []string{"-c", "sleep 5"})
+	if err := tm.StartInDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	tm.Stop()
+	if err := tm.StartInDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer tm.Stop()
+
+	time.Sleep(300 * time.Millisecond)
+	if !tm.Running() {
+		t.Error("new session was killed by the previous session's goroutines")
+	}
+	if err := tm.Resize(40, 100); err != nil {
+		t.Errorf("resize on the new session failed: %v", err)
+	}
+}
+
+// Only recognized control frames are intercepted; anything else is input.
+func TestHandleControlMessage(t *testing.T) {
+	tm := NewTerminalManager("echo", nil)
+	if !tm.handleControlMessage([]byte(`{"type":"resize","rows":40,"cols":80}`)) {
+		t.Error("resize frame should be handled as control")
+	}
+	if tm.handleControlMessage([]byte(`{"type":"unknown"}`)) {
+		t.Error("unknown JSON type must be passed through to the pty")
+	}
+	if tm.handleControlMessage([]byte("hello world")) {
+		t.Error("plain text must be passed through to the pty")
 	}
 }

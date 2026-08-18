@@ -13,7 +13,14 @@
     <span id="status-dot" class="dot disconnected"></span>
     <span>Claude Remote</span>
     <span id="status-text">Not connected</span>
+    <button id="btn-retry" class="retry hidden" type="button">Retry</button>
   </header>
+
+  <!-- Connection problem banner -->
+  <div id="conn-banner" class="banner hidden">
+    <div id="conn-msg"></div>
+    <div id="conn-hint" class="banner-hint"></div>
+  </div>
 
   <!-- Screen 1: Folder Picker -->
   <div id="screen-picker" class="screen active">

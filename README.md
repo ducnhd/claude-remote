@@ -4,7 +4,7 @@ Control Claude Code CLI from your phone browser, anywhere. Continue sessions sea
 
 ## What It Does
 
-Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone connects through Tailscale VPN and interacts via a mobile-optimized chat UI. Ask Claude to "handoff to phone" — scan QR to continue your session.
+Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phone reaches it over a Cloudflare Tunnel (no VPN, no port forwarding, works on mobile data) and interacts via a mobile-optimized chat UI. Ask Claude to "handoff to phone" — scan QR to continue your session.
 
 ## Features
 
@@ -14,24 +14,49 @@ Your Mac runs a Go server that wraps Claude Code in a pseudo-terminal. Your phon
 - **Folder picker** — browse Desktop/Downloads/Documents, choose working directory
 - **Chat UI** — native text input with IME support, colored terminal output with smooth native scrolling
 - **Quick actions** — Enter, Accept (y), Reject (n), Esc, Ctrl+C buttons for Claude's prompts
-- **QR auth** — scan once, JWT cookie lasts 90 days
-- **Tailscale HTTPS** — encrypted VPN mesh, no port forwarding needed
-- **Auto-start** — launchd keeps server running on Mac boot
+- **QR auth** — scan once, JWT cookie lasts 90 days and renews itself while you keep using it
+- **Cloudflare Tunnel** — HTTPS from anywhere with nothing installed on the phone; Tailscale/LAN still supported
+- **Self-diagnosing** — `claude-remote doctor` checks every link in the chain and prints the exact fix
+- **Auto-start** — launchd keeps server running on Mac boot; the tunnel restarts itself if it drops
 
 ## Quick Start
 
 ```bash
-# Prerequisites: Go 1.25+, Tailscale on Mac + phone
+# Prerequisites: Go 1.25+, cloudflared (brew install cloudflared)
 
-# Build
 make build
-
-# First-time setup
-./claude-remote setup    # generates QR code
-./claude-remote serve    # start server
-
-# Scan QR with phone → open URL → pick folder → start Claude
+./claude-remote setup    # generates the auth secret
+./claude-remote serve    # starts the server + tunnel
 ```
+
+In another terminal:
+
+```bash
+./claude-remote qr       # QR code with the live tunnel URL
+```
+
+Scan it with your phone → pick a folder → start Claude. If anything fails:
+
+```bash
+./claude-remote doctor
+```
+
+### Connection modes
+
+Set the `tunnel` block in `~/.claude-remote/config.json`:
+
+| Mode | URL | Setup | Notes |
+|------|-----|-------|-------|
+| `quick` (default) | random `*.trycloudflare.com` | none | URL changes whenever cloudflared restarts, so re-pair with `claude-remote qr` |
+| `named` | your own stable hostname | Cloudflare account + tunnel token | URL never changes, so the phone stays paired |
+| `off` | `https://<host>:8822` | Tailscale or LAN | Requires a valid TLS cert; server binds `0.0.0.0` |
+
+```jsonc
+// named tunnel example
+"tunnel": { "mode": "named", "hostname": "claude.example.com", "token": "eyJ..." }
+```
+
+With a tunnel enabled the server binds `127.0.0.1` only — cloudflared is the sole way in, and `/mcp` plus the pairing endpoints stay on the loopback listener where the tunnel cannot reach them.
 
 ## Install as Service
 
@@ -44,11 +69,8 @@ mkdir -p ~/bin
 cp claude-remote ~/bin/
 cp -r static ~/bin/static
 
-# Setup Tailscale HTTPS
-sudo tailscale cert $(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
-mkdir -p ~/.claude-remote
-sudo cp ~/Desktop/*.crt ~/Desktop/*.key ~/.claude-remote/
-sudo chown $(whoami) ~/.claude-remote/*.key ~/.claude-remote/*.crt
+# Install the tunnel client
+brew install cloudflared
 
 # Install launchd service (auto-start on boot)
 # Edit the plist to point to your binary path, then:
@@ -61,8 +83,9 @@ cat ~/.claude-remote/config.json
 # Ensure "claude_path" points to the full path, e.g.:
 # "claude_path": "/Users/yourname/.local/bin/claude"
 
-# Generate QR for first-time phone auth
+# Generate the auth secret, then pair the phone
 claude-remote setup
+claude-remote qr
 
 # Register MCP with Claude Code (one-time, user scope)
 claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp

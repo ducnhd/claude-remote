@@ -26,10 +26,12 @@ func TestValidatePath(t *testing.T) {
 		{"gnupg", "/Users/test/.gnupg/key", true},
 		{"aws", "/Users/test/.aws/credentials", true},
 		{"empty path", "", true},
+		{"sibling prefix bypass", "/Users/test-other/x", true},
+		{"relative path", "relative/path", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := fb.ValidatePath(tt.path)
+			_, err := fb.ValidatePath(tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidatePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
@@ -87,8 +89,10 @@ func TestHandleFilesAPI(t *testing.T) {
 	}
 	var resp DirResponse
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.Path != dir {
-		t.Errorf("want path %s, got %s", dir, resp.Path)
+	// The API answers with the symlink-resolved path (on macOS /var -> /private/var).
+	want := resolvePath(dir)
+	if resp.Path != want {
+		t.Errorf("want path %s, got %s", want, resp.Path)
 	}
 }
 

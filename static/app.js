@@ -29,7 +29,11 @@
   function sendRaw(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(new TextEncoder().encode(data));
+      return true;
     }
+    setStatus(false, 'Not connected — message not sent');
+    if (typeof diagnose === 'function') diagnose();
+    return false;
   }
 
   function showScreen(id) {
@@ -166,7 +170,7 @@
 
   // --- Back button ---
   document.getElementById('btn-back').addEventListener('click', () => {
-    if (confirm('Going back will stop the current Claude session. Continue?')) {
+    if (confirm('Disconnect from this session? Claude keeps running on your Mac.')) {
       cleanup();
       showScreen('screen-picker');
       document.getElementById('btn-start').textContent = 'Start Claude';
@@ -403,15 +407,88 @@
     }
   }
 
+  // --- Connection feedback ---
+  const banner = document.getElementById('conn-banner');
+  const bannerMsg = document.getElementById('conn-msg');
+  const bannerHint = document.getElementById('conn-hint');
+  const btnRetry = document.getElementById('btn-retry');
+
+  function showProblem(msg, hint) {
+    bannerMsg.textContent = msg;
+    bannerHint.textContent = hint || '';
+    banner.classList.remove('hidden');
+    btnRetry.classList.remove('hidden');
+  }
+
+  function clearProblem() {
+    banner.classList.add('hidden');
+    btnRetry.classList.add('hidden');
+  }
+
+  // Ask the server why the socket will not open: /health needs no auth,
+  // /api/claude/status needs a valid cookie. That tells apart "no network"
+  // from "session expired" from "server down".
+  async function diagnose() {
+    try {
+      const health = await fetch('/health', { cache: 'no-store' });
+      if (!health.ok) {
+        showProblem('Server reachable but unhealthy.', 'Run `claude-remote doctor` on your Mac.');
+        return;
+      }
+    } catch (e) {
+      showProblem('Cannot reach the server.',
+        'The Mac may be asleep or the tunnel is down. Run `claude-remote doctor` on your Mac.');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/claude/status', { cache: 'no-store' });
+      if (resp.status === 401) {
+        showProblem('Session expired — scan a new QR code.',
+          'Run `claude-remote qr` on your Mac, then scan it.');
+        return;
+      }
+      const data = await resp.json();
+      if (!data.running) {
+        showProblem('No Claude session is running.', 'Go back and pick a folder to start one.');
+        return;
+      }
+      showProblem('Connection dropped.', 'Tap Retry to reconnect.');
+    } catch (e) {
+      showProblem('Connection problem: ' + e.message, 'Tap Retry to reconnect.');
+    }
+  }
+
+  btnRetry.addEventListener('click', () => {
+    clearProblem();
+    failedAttempts = 0;
+    setStatus(false, 'Reconnecting...');
+    connectWS();
+  });
+
   // --- WebSocket ---
+  let failedAttempts = 0;
+  const MAX_FAILED_ATTEMPTS = 5;
+
   function connectWS() {
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws/term');
     ws.binaryType = 'arraybuffer';
+    let opened = false;
 
     ws.onopen = () => {
+      opened = true;
+      failedAttempts = 0;
+      clearProblem();
       setStatus(true);
+      // The server replays its whole backlog on every connect, so start
+      // from a clean buffer — otherwise a reconnect duplicates the session.
+      if (term) {
+        term.reset();
+        document.getElementById('output-text').innerHTML = '';
+        renderedLines = [];
+        lineElements = [];
+      }
       termCols = calcCols();
       if (term) {
         term.resize(termCols, 50);
@@ -427,10 +504,20 @@
     };
 
     ws.onclose = (evt) => {
-      setStatus(false);
-      if (evt.code === 1006) {
-        setStatus(false, 'Disconnected — check Tailscale VPN');
+      if (!opened) {
+        // Never completed the handshake: usually an expired cookie (the
+        // upgrade is rejected with 401) or no route to the Mac at all.
+        failedAttempts++;
+        if (failedAttempts === 2) {
+          diagnose(); // tell the user the real reason instead of spinning
+        }
+        if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+          setStatus(false, 'Not connected');
+          diagnose();
+          return; // stop the retry loop instead of hammering forever
+        }
       }
+      setStatus(false, 'Reconnecting...');
       reconnectTimer = setTimeout(connectWS, 3000);
     };
 
@@ -520,7 +607,8 @@
     if (isComposing) return;
     const text = chatInput.value;
     if (text === '') return;
-    sendRaw(text + '\r');
+    // Keep the text in the box if the socket is down, so it is not lost.
+    if (!sendRaw(text + '\r')) return;
     chatInput.value = '';
     chatInput.style.height = 'auto';
     setTimeout(() => chatInput.focus(), 50);

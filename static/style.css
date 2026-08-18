@@ -151,3 +151,29 @@ header {
 .handoff-icon { font-size: 24px; }
 .handoff-label { font-size: 16px; font-weight: 600; }
 .handoff-desc { font-size: 13px; color: #888; }
+
+/* --- Connection feedback --- */
+.retry {
+  margin-left: auto;
+  background: #2563eb;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.retry.hidden { display: none; }
+
+.banner {
+  background: #7f1d1d;
+  color: #fee2e2;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.banner.hidden { display: none; }
+.banner-hint {
+  color: #fca5a5;
+  font-size: 12px;
+  margin-top: 4px;
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -51,14 +52,19 @@ func TestGenerateToken(t *testing.T) {
 	}
 }
 
-func TestTokenSingleUse(t *testing.T) {
-	a := &Auth{}
+// Setup tokens are reusable until they expire (see ValidateToken), so a
+// prefetching camera app cannot lock the user out of pairing.
+func TestTokenReusableUntilExpiry(t *testing.T) {
+	a := NewAuth("/tmp/test-secret")
 	token := a.GenerateToken()
 	if !a.ValidateToken(token) {
 		t.Error("first use should succeed")
 	}
-	if a.ValidateToken(token) {
-		t.Error("second use should fail")
+	if !a.ValidateToken(token) {
+		t.Error("second use should still succeed within the TTL")
+	}
+	if a.ValidateToken("wrong-token") {
+		t.Error("a wrong token must never validate")
 	}
 }
 
@@ -159,5 +165,55 @@ func TestJWTWrongSecret(t *testing.T) {
 	_, err := a.VerifyJWT(tokenStr)
 	if err == nil {
 		t.Error("JWT signed with old secret should fail")
+	}
+}
+
+// Setup tokens must not stay valid forever.
+func TestSetupTokenExpires(t *testing.T) {
+	a := NewAuth(filepath.Join(t.TempDir(), "secret.key"))
+	token := a.GenerateToken()
+	a.mu.Lock()
+	a.pendingExpires = time.Now().Add(-time.Second)
+	a.mu.Unlock()
+	if a.ValidateToken(token) {
+		t.Error("expired setup token was accepted")
+	}
+}
+
+func TestSetPendingTokenRefreshesExpiry(t *testing.T) {
+	a := NewAuth(filepath.Join(t.TempDir(), "secret.key"))
+	a.setPendingToken("abc123")
+	if !a.ValidateToken("abc123") {
+		t.Error("token loaded from disk should validate")
+	}
+	// Reusable within its TTL: a camera app that prefetches the QR URL must
+	// not lock the user out of pairing.
+	if !a.ValidateToken("abc123") {
+		t.Error("setup token should stay valid until it expires")
+	}
+	a.ClearPendingToken()
+	if a.ValidateToken("abc123") {
+		t.Error("cleared token must be rejected")
+	}
+}
+
+// An empty or truncated secret file would let anyone forge a JWT.
+func TestLoadSecretRejectsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret.key")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAuth(path).LoadSecret(); err == nil {
+		t.Error("empty secret file must be rejected")
+	}
+}
+
+func TestIssueJWTWithoutSecret(t *testing.T) {
+	a := NewAuth(filepath.Join(t.TempDir(), "secret.key"))
+	if _, err := a.IssueJWT("device"); err == nil {
+		t.Error("issuing a JWT without a secret must fail")
+	}
+	if _, err := a.VerifyJWT("whatever"); err == nil {
+		t.Error("verifying a JWT without a secret must fail")
 	}
 }

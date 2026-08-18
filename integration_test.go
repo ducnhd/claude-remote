@@ -69,13 +69,21 @@ func TestFullAuthFlow(t *testing.T) {
 		t.Errorf("want 200 with auth, got %d", resp.StatusCode)
 	}
 
-	// 4. Token is single-use
+	// 4. The setup token can be scanned again while it is alive, but a
+	//    wrong token is always rejected.
 	resp, err = client.Get(ts.URL + "/auth/scan?token=" + token)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resp.StatusCode != 302 {
+		t.Errorf("want 302 on re-scan within TTL, got %d", resp.StatusCode)
+	}
+	resp, err = client.Get(ts.URL + "/auth/scan?token=deadbeef")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.StatusCode != 401 {
-		t.Errorf("want 401 on reuse, got %d", resp.StatusCode)
+		t.Errorf("want 401 for a wrong token, got %d", resp.StatusCode)
 	}
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +8,9 @@ import (
 	"strings"
 	"time"
 )
+
+// maxReadSize caps the file-read endpoint response.
+const maxReadSize = 1 << 20
 
 var blockedPaths = []string{
 	".ssh", ".env", ".claude-remote", ".gnupg", ".aws",
@@ -42,33 +44,38 @@ func NewFileBrowser(allowedDirs []string) *FileBrowser {
 	return &FileBrowser{allowedDirs: allowedDirs}
 }
 
-func (fb *FileBrowser) ValidatePath(path string) error {
-	if path == "" {
-		return fmt.Errorf("empty path")
+// ValidatePath returns the resolved absolute path if it is allowed.
+func (fb *FileBrowser) ValidatePath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("empty path")
 	}
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("path traversal not allowed")
+	if hasDotDot(path) {
+		return "", fmt.Errorf("path traversal not allowed")
 	}
-	cleaned := filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(cleaned)
-	if err != nil {
-		resolved = cleaned
+	resolved := resolvePath(path)
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("path must be absolute")
 	}
 	for _, blocked := range blockedPaths {
 		if containsComponent(resolved, blocked) {
-			return fmt.Errorf("access to %s is blocked", blocked)
+			return "", fmt.Errorf("access to %s is blocked", blocked)
 		}
 	}
-	for _, dir := range fb.allowedDirs {
-		resolvedDir, err := filepath.EvalSymlinks(dir)
-		if err != nil {
-			resolvedDir = filepath.Clean(dir)
-		}
-		if strings.HasPrefix(resolved, resolvedDir) {
-			return nil
+	if !withinAllowed(resolved, fb.allowedDirs) {
+		return "", fmt.Errorf("path outside allowed directories")
+	}
+	return resolved, nil
+}
+
+// hasDotDot reports whether any path component is "..", without rejecting
+// legitimate names such as "notes..txt".
+func hasDotDot(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == ".." {
+			return true
 		}
 	}
-	return fmt.Errorf("path outside allowed directories")
+	return false
 }
 
 func containsComponent(path, component string) bool {
@@ -97,10 +104,11 @@ func isBlockedEntry(name string) bool {
 }
 
 func (fb *FileBrowser) ListDir(path string) ([]FileEntry, error) {
-	if err := fb.ValidatePath(path); err != nil {
+	resolved, err := fb.ValidatePath(path)
+	if err != nil {
 		return nil, err
 	}
-	dirEntries, err := os.ReadDir(path)
+	dirEntries, err := os.ReadDir(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("read dir: %w", err)
 	}
@@ -130,60 +138,64 @@ func (fb *FileBrowser) ListDir(path string) ([]FileEntry, error) {
 func (fb *FileBrowser) HandleList(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
+		if len(fb.allowedDirs) == 0 {
+			writeJSONError(w, http.StatusForbidden, "no allowed directories configured")
+			return
+		}
 		path = fb.allowedDirs[0]
 	}
-	// Expand ~ to home directory
-	if strings.HasPrefix(path, "~/") || path == "~" {
-		home, _ := os.UserHomeDir()
-		if path == "~" {
-			path = home
-		} else {
-			path = filepath.Join(home, path[2:])
-		}
-	}
+	path = expandHome(path)
 	entries, err := fb.ListDir(path)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusForbidden)
+		writeJSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	resolved := resolvePath(path)
+	// Keep the parent inside the allowed roots so the UI cannot walk out.
+	parent := filepath.Dir(resolved)
+	if !withinAllowed(parent, fb.allowedDirs) {
+		parent = resolved
+	}
 	resp := DirResponse{
-		Path:    path,
-		Parent:  filepath.Dir(path),
+		Path:    resolved,
+		Parent:  parent,
 		Entries: entries,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (fb *FileBrowser) HandleRead(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
-	if err := fb.ValidatePath(path); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusForbidden)
+	resolved, err := fb.ValidatePath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeJSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(resolved)
 	if err != nil {
-		http.Error(w, `{"error":"file not found"}`, http.StatusNotFound)
+		writeJSONError(w, http.StatusNotFound, "file not found")
 		return
 	}
 	if info.IsDir() {
-		http.Error(w, `{"error":"cannot read directory"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "cannot read directory")
 		return
 	}
-	if info.Size() > 1<<20 {
-		http.Error(w, `{"error":"file too large (max 1MB)"}`, http.StatusBadRequest)
+	if !info.Mode().IsRegular() {
+		writeJSONError(w, http.StatusBadRequest, "not a regular file")
 		return
 	}
-	data, err := os.ReadFile(path)
+	if info.Size() > maxReadSize {
+		writeJSONError(w, http.StatusBadRequest, "file too large (max 1MB)")
+		return
+	}
+	data, err := os.ReadFile(resolved)
 	if err != nil {
-		http.Error(w, `{"error":"read failed"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "read failed")
 		return
 	}
 	resp := FileContentResponse{
-		Path:    path,
+		Path:    resolved,
 		Content: string(data),
 		Size:    info.Size(),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }

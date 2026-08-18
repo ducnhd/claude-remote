@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/skip2/go-qrcode"
@@ -36,15 +37,9 @@ type mcpToolResult struct {
 }
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	// Localhost-only check
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	// Localhost-only: also rejects tunnel-forwarded requests, which would
+	// otherwise look like loopback traffic.
+	if !s.localOnly(w, r) {
 		return
 	}
 
@@ -54,7 +49,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -108,7 +103,8 @@ func (s *Server) mcpToolsList(w http.ResponseWriter, req *jsonrpcRequest) {
 					},
 					"mode": map[string]interface{}{
 						"type":        "string",
-						"description": "Handoff mode: choose, resume, or new",
+						"description": "Handoff mode: choose (ask on phone), attach (join running session), or continue (resume last session)",
+						"enum":        []string{"choose", "attach", "continue"},
 						"default":     "choose",
 					},
 				},
@@ -153,19 +149,54 @@ func (s *Server) mcpToolHandoff(w http.ResponseWriter, id interface{}, args json
 		Mode string `json:"mode"`
 	}
 	if args != nil {
-		json.Unmarshal(args, &a)
+		if err := json.Unmarshal(args, &a); err != nil {
+			s.mcpError(w, id, -32602, "invalid arguments")
+			return
+		}
 	}
-	if a.Mode == "" {
+	switch a.Mode {
+	case "attach", "continue", "choose":
+	case "":
 		a.Mode = "choose"
+	default:
+		s.mcpError(w, id, -32602, fmt.Sprintf("invalid mode %q (want attach, continue or choose)", a.Mode))
+		return
 	}
 
-	hostname := detectTailscaleHost()
 	home, _ := os.UserHomeDir()
-	proto := detectProto(s.config.DataDir, home+"/Desktop", "/var/run/tailscale")
-	token := s.auth.GenerateHandoffToken()
+	dir := expandHome(strings.TrimSpace(a.Dir))
+	if dir == "" {
+		dir = home
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	if !withinAllowed(dir, s.config.AllowedDirs) {
+		s.mcpError(w, id, -32602, fmt.Sprintf("directory not allowed: %s", dir))
+		return
+	}
 
-	url := fmt.Sprintf("%s://%s:%d/handoff?token=%s&dir=%s&mode=%s",
-		proto, hostname, s.config.Port, token, a.Dir, a.Mode)
+	token := s.auth.GenerateHandoffToken()
+	if token == "" {
+		s.mcpError(w, id, -32603, "failed to generate handoff token")
+		return
+	}
+
+	// PublicBase resolves to the live tunnel URL when one is up, and falls
+	// back to Tailscale/LAN otherwise.
+	base := s.PublicBase()
+	if state, _, lastErr := s.tunnel.Status(); s.config.Tunnel.Enabled() && state != "up" {
+		msg := "tunnel is not up (state: " + state + ")"
+		if lastErr != "" {
+			msg += ": " + lastErr
+		}
+		s.mcpError(w, id, -32603, msg+" — run 'claude-remote doctor' on the Mac")
+		return
+	}
+
+	// Query values must be escaped: paths contain spaces and "&".
+	query := neturl.Values{"token": {token}, "dir": {dir}, "mode": {a.Mode}}
+	url := base + "/handoff?" + query.Encode()
 
 	qr, err := qrcode.New(url, qrcode.Medium)
 	var qrStr string
@@ -179,7 +210,7 @@ func (s *Server) mcpToolHandoff(w http.ResponseWriter, id interface{}, args json
 		sb.WriteString("\n")
 	}
 	sb.WriteString(url)
-	sb.WriteString("\n\nToken expires in 5 minutes.")
+	fmt.Fprintf(&sb, "\n\nDirectory: %s\nMode: %s\nToken expires in %s.", dir, a.Mode, handoffTokenTTL)
 
 	result := mcpToolResult{
 		Content: []mcpContent{{Type: "text", Text: sb.String()}},
@@ -193,9 +224,16 @@ func (s *Server) mcpToolStatus(w http.ResponseWriter, id interface{}) {
 	dir := s.terminal.dir
 	numClients := len(s.terminal.clients)
 	s.terminal.mu.Unlock()
+	if dir == "" {
+		dir = "(none)"
+	}
 
-	text := fmt.Sprintf("claude-remote v%s\nSession running: %v\nDirectory: %s\nConnected clients: %d",
-		version, running, dir, numClients)
+	tunnelState, tunnelURL, tunnelErr := s.tunnel.Status()
+	text := fmt.Sprintf("claude-remote v%s\nSession running: %v\nDirectory: %s\nConnected clients: %d\nTunnel: %s (%s)\nPhone URL: %s",
+		version, running, dir, numClients, s.config.Tunnel.Mode, tunnelState, s.PublicBase())
+	if tunnelURL == "" && tunnelErr != "" {
+		text += "\nTunnel error: " + tunnelErr
+	}
 
 	result := mcpToolResult{
 		Content: []mcpContent{{Type: "text", Text: text}},
