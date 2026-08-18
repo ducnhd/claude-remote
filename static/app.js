@@ -37,6 +37,21 @@
     return false;
   }
 
+  // Phones have no room for a full project path; keep the meaningful tail.
+  function shortenPath(path, keep) {
+    if (!path) return '';
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length <= keep) return path;
+    return '…/' + parts.slice(-keep).join('/');
+  }
+
+  function setDirLabel(id, path) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = shortenPath(path, 3);
+    el.title = path;
+  }
+
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
@@ -181,7 +196,7 @@
         return;
       }
       showScreen('screen-chat');
-      document.getElementById('chat-dir').textContent = selectedDir;
+      setDirLabel('chat-dir', selectedDir);
       // Clear old output
       document.getElementById('output-text').innerHTML = '';
       initTerminal();
@@ -630,7 +645,10 @@
   const promptHint = document.getElementById('prompt-hint');
 
   function updatePromptHint(text) {
-    const tail = text.slice(-2000);
+    // Strip escape sequences first: the raw stream interleaves colour codes
+    // between the cursor marker and the option number, so patterns like
+    // "❯ 2." never match the unstripped text.
+    const tail = text.slice(-4000).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b[()][A-Za-z0-9]/g, '');
     let msg = '';
     if (/Do you trust|trust this folder|trust this configuration|safety check|adds \d+ director/i.test(tail)) {
       msg = 'Claude is asking you to confirm this folder — press Enter ↵ to accept (↑ ↓ to change the choice).';
@@ -703,13 +721,13 @@
       startContinueSession(dir);
       return;
     }
-    document.getElementById('handoff-dir').textContent = dir;
+    setDirLabel('handoff-dir', dir);
     showScreen('screen-handoff');
   }
 
   async function attachToSession(dir) {
     showScreen('screen-chat');
-    document.getElementById('chat-dir').textContent = dir;
+    setDirLabel('chat-dir', dir);
     document.getElementById('output-text').innerHTML = '';
     // Check if session is running before attaching
     try {
@@ -742,7 +760,7 @@
 
   async function startContinueSession(dir) {
     showScreen('screen-chat');
-    document.getElementById('chat-dir').textContent = dir;
+    setDirLabel('chat-dir', dir);
     document.getElementById('output-text').innerHTML = '';
     try {
       const resp = await fetch('/api/claude/start', {
