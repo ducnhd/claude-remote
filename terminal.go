@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,7 +133,7 @@ func (tm *TerminalManager) start(dir string, args []string) error {
 	tm.buffer.Clear()
 	tm.dir = dir
 	c := exec.Command(tm.cmd, args...)
-	c.Env = os.Environ()
+	c.Env = childEnv()
 	if dir != "" {
 		c.Dir = dir
 	}
@@ -146,6 +148,68 @@ func (tm *TerminalManager) start(dir string, args []string) error {
 
 	tm.startIO(tm.gen, ptmx, c)
 	return nil
+}
+
+// childEnv builds the environment for the claude process.
+//
+// launchd starts the server with no TERM and no LANG, and passing that
+// environment straight through leaves the TUI unable to interpret keystrokes:
+// the terminal draws, the kernel echoes raw characters, but nothing the phone
+// types ever reaches the application. PATH is widened for the same reason the
+// config needs an absolute claude_path — launchd's PATH is minimal.
+func childEnv() []string {
+	env := map[string]string{}
+	var order []string
+	set := func(k, v string) {
+		if _, seen := env[k]; !seen {
+			order = append(order, k)
+		}
+		env[k] = v
+	}
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			set(kv[:i], kv[i+1:])
+		}
+	}
+	fallback := func(k, v string) {
+		if env[k] == "" {
+			set(k, v)
+		}
+	}
+	fallback("TERM", "xterm-256color")
+	fallback("COLORTERM", "truecolor")
+	fallback("LANG", "en_US.UTF-8")
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		fallback("HOME", home)
+		path := env["PATH"]
+		for _, dir := range []string{
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, "bin"),
+			"/opt/homebrew/bin",
+			"/usr/local/bin",
+		} {
+			if !pathHasDir(path, dir) {
+				path = dir + ":" + path
+			}
+		}
+		set("PATH", strings.TrimSuffix(path, ":"))
+	}
+
+	out := make([]string, 0, len(order))
+	for _, k := range order {
+		out = append(out, k+"="+env[k])
+	}
+	return out
+}
+
+func pathHasDir(path, dir string) bool {
+	for _, p := range strings.Split(path, ":") {
+		if p == dir {
+			return true
+		}
+	}
+	return false
 }
 
 // startIO launches goroutines to read pty output and wait for process exit.

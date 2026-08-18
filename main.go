@@ -184,10 +184,12 @@ func cmdInstall() {
 		os.Exit(1)
 	}
 
-	// Unload first so re-installs pick up the new binary path.
-	exec.Command("launchctl", "unload", plistPath).Run()
-	if out, err := exec.Command("launchctl", "load", plistPath).CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: launchctl load failed: %v %s\n", err, strings.TrimSpace(string(out)))
+	// bootout+bootstrap reloads the plist from disk. `load` is a no-op when
+	// the job is already loaded, which silently keeps the old config running.
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	exec.Command("launchctl", "bootout", domain+"/com.claude-remote").Run()
+	if out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: launchctl bootstrap failed: %v %s\n", err, strings.TrimSpace(string(out)))
 	}
 	fmt.Printf("Installed and loaded: %s\n", plistPath)
 }
@@ -195,7 +197,8 @@ func cmdInstall() {
 func cmdUninstall() {
 	home, _ := os.UserHomeDir()
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.claude-remote.plist")
-	exec.Command("launchctl", "unload", plistPath).Run()
+	exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/com.claude-remote", os.Getuid())).Run()
+	exec.Command("launchctl", "unload", plistPath).Run() // older macOS fallback
 	os.Remove(plistPath)
 	fmt.Println("Uninstalled.")
 }
@@ -220,8 +223,12 @@ func cmdQR() {
 		TTL  string `json:"ttl"`
 		Err  string `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.URL == "" {
-		fmt.Fprintf(os.Stderr, "Pairing failed: %s\n", strings.TrimSpace(out.Err+" "+fmt.Sprint(err)))
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out.URL == "" {
+		fmt.Fprintf(os.Stderr, "Pairing failed: %s\n", strings.TrimSpace(out.Err))
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			fmt.Fprintln(os.Stderr, "The tunnel needs a few seconds after a restart — retry, or run: claude-remote doctor")
+		}
 		os.Exit(1)
 	}
 	if strings.Contains(out.Base, "localhost") {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -81,7 +82,7 @@ func (s *Server) registerRoutes() {
 	}
 	if _, err := os.Stat(staticDir); err == nil {
 		log.Printf("Serving static files from %s", staticDir)
-		s.mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+		s.mux.Handle("/", noStore(http.FileServer(http.Dir(staticDir))))
 	} else {
 		log.Printf("WARNING: static directory not found")
 	}
@@ -310,7 +311,7 @@ func (s *Server) Run() error {
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: s.mux,
+		Handler: accessLog(s.mux),
 		// No write timeout: /ws/term is a long-lived WebSocket.
 		ReadHeaderTimeout: 20 * time.Second,
 	}
@@ -386,6 +387,63 @@ func (s *Server) Run() error {
 	return runErr
 }
 
+// noStore makes browsers revalidate static assets. Mobile Safari happily
+// serves a months-old app.js from cache otherwise, so UI fixes never land.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// statusRecorder captures the response status for the access log.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
+}
+
+// Hijack is required so WebSocket upgrades still work behind the logger.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	r.status = http.StatusSwitchingProtocols
+	return h.Hijack()
+}
+
+// accessLog records every public request. Without it there is no way to tell
+// "the phone got an error" apart from "the phone never reached us".
+func accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+		if rec.status == 0 {
+			rec.status = http.StatusOK
+		}
+		ua := r.Header.Get("User-Agent")
+		if len(ua) > 60 {
+			ua = ua[:60]
+		}
+		log.Printf("REQ %s %s %s → %d (%dms) ip=%s ua=%q",
+			r.Proto, r.Method, r.URL.Path, rec.status,
+			time.Since(start).Milliseconds(), clientIP(r), ua)
+	})
+}
+
 // localHandler builds the loopback-only mux (MCP + pairing + health).
 func (s *Server) localHandler() http.Handler {
 	mux := http.NewServeMux()
@@ -400,6 +458,18 @@ func (s *Server) localHandler() http.Handler {
 func (s *Server) handleLocalPair(w http.ResponseWriter, r *http.Request) {
 	if !s.localOnly(w, r) {
 		return
+	}
+	// Pairing against the LAN fallback while the tunnel is still coming up
+	// produces a QR that only works on the local wifi — say so instead.
+	if s.config.Tunnel.Enabled() {
+		if state, url, lastErr := s.tunnel.Status(); state != "up" || url == "" {
+			msg := "tunnel not ready (state: " + state + ")"
+			if lastErr != "" {
+				msg += ": " + lastErr
+			}
+			writeJSONError(w, http.StatusServiceUnavailable, msg)
+			return
+		}
 	}
 	token := s.auth.GenerateToken()
 	if token == "" {

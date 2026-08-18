@@ -30,14 +30,34 @@ install: build
 	cp -R static/. $(HOME)/bin/static/
 	mkdir -p $(HOME)/Library/LaunchAgents
 	sed 's|__HOME__|$(HOME)|g' $(PLIST_SRC) > $(PLIST_DST)
-	launchctl load $(PLIST_DST) 2>/dev/null || true
-	# load is a no-op when the job is already loaded; kickstart -k restarts it.
-	launchctl kickstart -k gui/$(shell id -u)/com.claude-remote 2>/dev/null || true
-	@echo "Installed and restarted. Pair a phone with: claude-remote qr"
+	# bootout+bootstrap, not load/kickstart: `load` is a no-op on an already
+	# loaded job and keeps serving the OLD plist, and `kickstart` then fails
+	# with EX_CONFIG(78) leaving the service dead.
+	@# bootout is asynchronous: bootstrapping too soon fails with
+	@# "Input/output error", so wait for the label to disappear first.
+	@launchctl bootout gui/$(shell id -u)/com.claude-remote 2>/dev/null || true
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		launchctl list | grep -q com.claude-remote || break; \
+		sleep 1; \
+	done
+	@launchctl bootstrap gui/$(shell id -u) $(PLIST_DST) || \
+		(sleep 2; launchctl bootstrap gui/$(shell id -u) $(PLIST_DST))
+	@sleep 3
+	@launchctl list | grep -q com.claude-remote && echo "Service running." || (echo "SERVICE FAILED TO START — check: make logs"; exit 1)
+	@echo "Installed. Pair a phone with: claude-remote qr"
 
 restart:
-	launchctl kickstart -k gui/$(shell id -u)/com.claude-remote
-	@echo "Restarted."
+	@# bootout is asynchronous: bootstrapping too soon fails with
+	@# "Input/output error", so wait for the label to disappear first.
+	@launchctl bootout gui/$(shell id -u)/com.claude-remote 2>/dev/null || true
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		launchctl list | grep -q com.claude-remote || break; \
+		sleep 1; \
+	done
+	@launchctl bootstrap gui/$(shell id -u) $(PLIST_DST) || \
+		(sleep 2; launchctl bootstrap gui/$(shell id -u) $(PLIST_DST))
+	@sleep 3
+	@launchctl list | grep -q com.claude-remote && echo "Restarted." || (echo "FAILED TO START — check: make logs"; exit 1)
 
 logs:
 	tail -f $(HOME)/.claude-remote/server.log

@@ -67,11 +67,18 @@
     <div id="output-scroll">
       <pre id="output-text"></pre>
     </div>
+    <!-- Claude Code menus (trust prompt, /model, agent list) are arrow-key
+         driven, so a phone without these buttons gets stuck with no way out. -->
+    <div id="prompt-hint" class="hint hidden"></div>
     <div id="quick-actions">
       <button class="action-btn enter" data-key="\r">Enter ↵</button>
+      <button class="action-btn" data-key="\x1b[A">↑</button>
+      <button class="action-btn" data-key="\x1b[B">↓</button>
       <button class="action-btn accept" data-key="y">✓ Accept</button>
       <button class="action-btn reject" data-key="n">✗ Reject</button>
       <button class="action-btn" data-key="\x1b">Esc</button>
+      <button class="action-btn" data-key="\t">Tab ⇥</button>
+      <button class="action-btn" data-key="\x1b[Z">⇧Tab</button>
       <button class="action-btn" data-key="\x03">Ctrl+C</button>
     </div>
     <div id="input-bar">

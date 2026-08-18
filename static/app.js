@@ -7,7 +7,8 @@
   let selectedDir = '';
   let isComposing = false;
   let syncTimer = null;
-  let termCols = 50; // will be calculated from screen width
+  let termCols = 50; // calculated from screen width at runtime
+  let termRows = 30; // calculated from the visible output height
 
   // --- Handoff URL param detection ---
   const urlParams = new URLSearchParams(location.search);
@@ -39,6 +40,30 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+  }
+
+  // Measure the height of one rendered line.
+  function lineHeightPx() {
+    const measure = document.createElement('div');
+    measure.className = 'output-line';
+    measure.textContent = 'M';
+    measure.style.cssText = 'position:absolute;visibility:hidden;';
+    document.body.appendChild(measure);
+    const h = measure.getBoundingClientRect().height;
+    document.body.removeChild(measure);
+    return h > 0 ? h : 18;
+  }
+
+  // Calculate terminal rows from the visible output area.
+  //
+  // This must match what the phone can actually show. Hardcoding 50 rows made
+  // Claude draw its input box at the bottom of a 50-row screen while only ~25
+  // rows were visible, so the phone showed a blank gap and nothing else.
+  function calcRows() {
+    const scrollEl = document.getElementById('output-scroll');
+    const h = (scrollEl && scrollEl.clientHeight) || window.innerHeight * 0.6;
+    const rows = Math.floor((h - 8) / lineHeightPx());
+    return Math.max(14, Math.min(60, rows));
   }
 
   // Calculate terminal cols from screen width
@@ -184,23 +209,21 @@
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (term) { term.dispose(); term = null; }
     document.getElementById('output-text').innerHTML = '';
-    renderedLines = [];
-    lineElements = [];
+    resetRenderState();
   }
 
   // --- Terminal (hidden xterm for escape sequence processing) ---
   function initTerminal() {
     if (term) { term.dispose(); }
     termCols = calcCols();
+    termRows = calcRows();
     term = new Terminal({
       cols: termCols,
-      rows: 50,
+      rows: termRows,
       scrollback: 10000,
     });
     term.open(document.getElementById('xterm-hidden'));
-    // Reset incremental render state
-    renderedLines = [];
-    lineElements = [];
+    resetRenderState();
   }
 
   // ANSI color map
@@ -289,41 +312,59 @@
   }
 
   // State for incremental rendering
-  let renderedLines = []; // cached HTML per logical line
+  let renderedLines = []; // cached HTML per logical line currently in the DOM
   let lineElements = [];  // DOM elements per logical line
+  let prefixLines = [];   // logical lines that scrolled off the live screen
+  let prefixRows = 0;     // absolute buffer row where prefixLines ends
 
-  // Build logical lines from xterm buffer
-  // A logical line = one or more physical lines (wrapped lines joined)
+  function resetRenderState() {
+    renderedLines = [];
+    lineElements = [];
+    prefixLines = [];
+    prefixRows = 0;
+  }
+
+  // Build logical lines from the xterm buffer.
+  // A logical line = one or more physical rows (wrapped rows joined).
+  //
+  // Rows above the live screen have scrolled off and can never change, so they
+  // are rendered once and cached. The live screen must be re-rendered every
+  // time: Claude Code repaints it in place, and the previous version of this
+  // code both stopped at the cursor row (hiding menus drawn below it) and only
+  // re-checked the last 3 lines for changes — which left the phone staring at
+  // a blank screen while Claude was busy redrawing.
+  function collectRows(buf, from, to, out) {
+    for (let i = from; i <= to; i++) {
+      const line = buf.getLine(i);
+      if (!line) { out.push(''); continue; }
+      const html = renderLine(line);
+      if (line.isWrapped && out.length > 0) {
+        out[out.length - 1] += html;
+      } else {
+        out.push(html);
+      }
+    }
+  }
+
   function getLogicalLines() {
     if (!term) return [];
     const buf = term.buffer.active;
-    const totalLines = buf.baseY + buf.cursorY + 1;
-    const logical = [];
-    let current = '';
+    const liveStart = Math.max(0, buf.baseY);
 
-    for (let i = 0; i < totalLines; i++) {
-      const line = buf.getLine(i);
-      if (!line) {
-        if (current !== '' || logical.length > 0) {
-          logical.push(current);
-          current = '';
-        } else {
-          logical.push('');
-        }
-        continue;
-      }
-
-      if (line.isWrapped) {
-        current += renderLine(line);
-      } else {
-        if (i > 0) {
-          logical.push(current);
-        }
-        current = renderLine(line);
-      }
+    if (prefixRows < liveStart) {
+      collectRows(buf, prefixRows, liveStart - 1, prefixLines);
+      prefixRows = liveStart;
     }
-    logical.push(current);
-    return logical;
+
+    const liveEnd = Math.min(buf.length, liveStart + term.rows) - 1;
+    const live = [];
+    if (liveEnd >= liveStart) {
+      collectRows(buf, liveStart, liveEnd, live);
+    }
+    // The TUI leaves the bottom of the screen empty; do not render padding.
+    while (live.length > 0 && live[live.length - 1] === '') live.pop();
+
+    return prefixLines.concat(live);
   }
 
   // Sync xterm buffer to visible output — true incremental DOM updates
@@ -348,9 +389,9 @@
       }
       renderedLines.length = Math.min(renderedLines.length, newCount);
 
-      // Update changed existing lines (only check last 3 + any earlier diffs)
-      const checkFrom = Math.max(0, Math.min(oldCount, newCount) - 3);
-      for (let i = checkFrom; i < Math.min(oldCount, newCount); i++) {
+      // Diff every line. Cached prefix lines are the same string references,
+      // so the comparison stays cheap even with a long scrollback.
+      for (let i = 0; i < Math.min(oldCount, newCount); i++) {
         if (renderedLines[i] !== logicalLines[i]) {
           lineElements[i].innerHTML = logicalLines[i];
           renderedLines[i] = logicalLines[i];
@@ -380,6 +421,9 @@
   // Force full re-sync (used on visibility change, resize)
   function forceSyncOutput() {
     if (!term) return;
+    // Re-wrapping after a resize invalidates every cached line.
+    prefixLines = [];
+    prefixRows = 0;
     const outputEl = document.getElementById('output-text');
     const scrollEl = document.getElementById('output-scroll');
     const wasNearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80;
@@ -465,6 +509,9 @@
     connectWS();
   });
 
+  // Rolling tail of raw terminal output, used to spot selection prompts.
+  let rawTail = '';
+
   // --- WebSocket ---
   let failedAttempts = 0;
   const MAX_FAILED_ATTEMPTS = 5;
@@ -486,20 +533,23 @@
       if (term) {
         term.reset();
         document.getElementById('output-text').innerHTML = '';
-        renderedLines = [];
-        lineElements = [];
+        resetRenderState();
+        rawTail = '';
       }
       termCols = calcCols();
+      termRows = calcRows();
       if (term) {
-        term.resize(termCols, 50);
+        term.resize(termCols, termRows);
       }
-      ws.send(JSON.stringify({ type: 'resize', rows: 50, cols: termCols }));
+      ws.send(JSON.stringify({ type: 'resize', rows: termRows, cols: termCols }));
     };
 
     ws.onmessage = (evt) => {
       if (!term) return;
       const data = typeof evt.data === 'string' ? evt.data : new TextDecoder().decode(evt.data);
       term.write(data);
+      rawTail = (rawTail + data).slice(-4000);
+      updatePromptHint(rawTail);
       syncOutput();
     };
 
@@ -536,11 +586,13 @@
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
       const newCols = calcCols();
-      if (newCols !== termCols && term) {
+      const newRows = calcRows();
+      if ((newCols !== termCols || newRows !== termRows) && term) {
         termCols = newCols;
-        term.resize(termCols, 50);
+        termRows = newRows;
+        term.resize(termCols, termRows);
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', rows: 50, cols: termCols }));
+          ws.send(JSON.stringify({ type: 'resize', rows: termRows, cols: termCols }));
         }
         // Force re-render after resize reflows xterm buffer
         forceSyncOutput();
@@ -559,7 +611,11 @@
   // --- Quick Action Buttons ---
   // HTML data-key contains literal strings like \r \x1b \x03 — parse to real chars
   function parseKey(raw) {
-    return raw.replace(/\\r/g, '\r').replace(/\\x1b/g, '\x1b').replace(/\\x03/g, '\x03');
+    return raw
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\x1b/g, '\x1b')
+      .replace(/\\x03/g, '\x03');
   }
 
   document.querySelectorAll('.action-btn').forEach(btn => {
@@ -568,6 +624,28 @@
       sendRaw(parseKey(btn.dataset.key));
     });
   });
+
+  // Claude ignores typed text while a selection prompt is open, which looks
+  // exactly like "the phone cannot send anything". Say what to press instead.
+  const promptHint = document.getElementById('prompt-hint');
+
+  function updatePromptHint(text) {
+    const tail = text.slice(-2000);
+    let msg = '';
+    if (/Do you trust|trust this folder|trust this configuration|safety check|adds \d+ director/i.test(tail)) {
+      msg = 'Claude is asking you to confirm this folder — press Enter ↵ to accept (↑ ↓ to change the choice).';
+    } else if (/Enter to confirm|Esc to cancel|Yes, proceed|No, exit/i.test(tail)) {
+      msg = 'Claude is waiting for a choice — use ↑ ↓ then Enter ↵. Typed text is ignored here.';
+    } else if (/❯\s*\d\./.test(tail)) {
+      msg = 'A menu is open — pick with ↑ ↓ and Enter ↵.';
+    }
+    if (msg) {
+      promptHint.textContent = msg;
+      promptHint.classList.remove('hidden');
+    } else {
+      promptHint.classList.add('hidden');
+    }
+  }
 
   // --- Chat Input with Vietnamese IME support ---
   const chatInput = document.getElementById('chat-input');

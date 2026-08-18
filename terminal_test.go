@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -188,5 +190,72 @@ func TestHandleControlMessage(t *testing.T) {
 	}
 	if tm.handleControlMessage([]byte("hello world")) {
 		t.Error("plain text must be passed through to the pty")
+	}
+}
+
+// Regression: launchd provides no TERM/LANG, and a TUI started without them
+// renders but never processes keystrokes — the phone appears unable to send.
+func TestChildEnvSuppliesTerminalVars(t *testing.T) {
+	for _, key := range []string{"TERM", "COLORTERM", "LANG"} {
+		t.Setenv(key, "")
+	}
+	env := childEnv()
+	get := func(key string) string {
+		for _, kv := range env {
+			if strings.HasPrefix(kv, key+"=") {
+				return strings.TrimPrefix(kv, key+"=")
+			}
+		}
+		return ""
+	}
+	if got := get("TERM"); got == "" {
+		t.Error("TERM must be set for the child process")
+	}
+	if got := get("LANG"); got == "" {
+		t.Error("LANG must be set so UTF-8 output renders")
+	}
+	if got := get("COLORTERM"); got == "" {
+		t.Error("COLORTERM should be set")
+	}
+	// No duplicate keys: os/exec would keep the last, but the ambiguity is
+	// not worth carrying.
+	seen := map[string]bool{}
+	for _, kv := range env {
+		key := strings.SplitN(kv, "=", 2)[0]
+		if seen[key] {
+			t.Errorf("duplicate env key %q", key)
+		}
+		seen[key] = true
+	}
+}
+
+// An existing TERM from an interactive shell must win over the fallback.
+func TestChildEnvKeepsExistingTerm(t *testing.T) {
+	t.Setenv("TERM", "screen-256color")
+	for _, kv := range childEnv() {
+		if kv == "TERM=screen-256color" {
+			return
+		}
+	}
+	t.Error("childEnv overwrote an existing TERM")
+}
+
+// launchd's PATH lacks the user bin dirs claude and its tools live in.
+func TestChildEnvWidensPath(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	var path string
+	for _, kv := range childEnv() {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	for _, want := range []string{filepath.Join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/bin"} {
+		if !pathHasDir(path, want) {
+			t.Errorf("PATH is missing %s: %s", want, path)
+		}
 	}
 }
