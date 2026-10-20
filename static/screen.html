@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Claude Remote · Screen</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    #screen-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16213e; flex-shrink: 0; }
+    #screen-bar a, #screen-bar button { padding: 6px 12px; border: 1px solid #444; background: none; color: #eee; border-radius: 4px; font-size: 14px; text-decoration: none; }
+    #screen-status { font-size: 12px; color: #888; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #vnc { flex: 1; overflow: hidden; background: #000; position: relative; }
+    #keys { display: flex; gap: 6px; padding: 6px 8px; background: #16213e; overflow-x: auto; flex-shrink: 0; }
+    #keys button { flex-shrink: 0; padding: 8px 12px; border: 1px solid #444; background: #1a1a2e; color: #eee; border-radius: 6px; font-size: 14px; }
+    #keys button.on { background: #60a5fa; color: #000; border-color: #60a5fa; }
+    #kbd-input { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
+    #login { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.7); z-index: 10; }
+    #login.show { display: flex; }
+    #login form { background: #16213e; padding: 20px; border-radius: 10px; width: min(320px, 90vw); display: flex; flex-direction: column; gap: 10px; }
+    #login h2 { font-size: 16px; color: #60a5fa; }
+    #login p { font-size: 12px; color: #888; }
+    #login input { padding: 10px; border-radius: 6px; border: 1px solid #444; background: #1a1a2e; color: #eee; font-size: 16px; }
+    #login button { padding: 10px; border-radius: 6px; border: none; background: #60a5fa; color: #000; font-size: 15px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="screen-bar">
+    <a href="/" title="Back to Claude">←</a>
+    <span id="status-dot" class="dot disconnected"></span>
+    <span id="screen-status">Connecting…</span>
+    <button id="btn-reconnect" type="button">↻</button>
+  </div>
+
+  <div id="vnc">
+    <div id="login">
+      <form id="login-form">
+        <h2>Mac login</h2>
+        <p>Your macOS user name and password. They go straight to Screen Sharing and are never stored.</p>
+        <input id="login-user" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="User name">
+        <input id="login-pass" type="password" autocomplete="current-password" placeholder="Password">
+        <button type="submit">Connect</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Touch: tap = click, long press = right click, two-finger drag = scroll. -->
+  <div id="keys">
+    <button id="btn-kbd" type="button">⌨</button>
+    <button id="btn-pan" type="button" title="Zoom 1:1 and drag to pan">🔍 1:1</button>
+    <button id="btn-cmd" type="button">⌘</button>
+    <button type="button" data-keysym="65307">Esc</button>
+    <button type="button" data-keysym="65289">Tab ⇥</button>
+    <button type="button" data-keysym="65293">Enter ↵</button>
+    <button type="button" data-keysym="65288">⌫</button>
+    <button type="button" data-keysym="65362">↑</button>
+    <button type="button" data-keysym="65364">↓</button>
+    <button type="button" data-keysym="65361">←</button>
+    <button type="button" data-keysym="65363">→</button>
+  </div>
+  <textarea id="kbd-input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>
+
+  <script type="module">
+    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/lib/rfb.js/+esm';
+
+    const XK_SUPER_L = 0xffeb; // noVNC maps the Meta key here; Screen Sharing reads it as ⌘
+    const XK_BACKSPACE = 0xff08;
+    const XK_RETURN = 0xff0d;
+
+    const vncEl = document.getElementById('vnc');
+    const statusEl = document.getElementById('screen-status');
+    const dot = document.getElementById('status-dot');
+    const login = document.getElementById('login');
+    const userEl = document.getElementById('login-user');
+    const passEl = document.getElementById('login-pass');
+    const kbd = document.getElementById('kbd-input');
+    const cmdBtn = document.getElementById('btn-cmd');
+    const panBtn = document.getElementById('btn-pan');
+
+    let rfb = null;
+    let cmdOn = false;
+    let connected = false;
+
+    try { userEl.value = localStorage.getItem('vnc-user') || ''; } catch (e) {}
+
+    function setStatus(text, ok) {
+      statusEl.textContent = text;
+      dot.className = 'dot ' + (ok ? 'connected' : 'disconnected');
+    }
+
+    function connect() {
+      if (rfb) { rfb.disconnect(); rfb = null; }
+      connected = false;
+      setStatus('Connecting…', false);
+      const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/vnc';
+      rfb = new RFB(vncEl, url, { wsProtocols: ['binary'] });
+      rfb.scaleViewport = true;
+      rfb.qualityLevel = 6;
+      rfb.compressionLevel = 2;
+      rfb.addEventListener('connect', () => {
+        connected = true;
+        login.classList.remove('show');
+        setStatus('Connected', true);
+      });
+      rfb.addEventListener('disconnect', (e) => {
+        login.classList.remove('show');
+        if (connected) {
+          setStatus('Disconnected — tap ↻ to reconnect', false);
+        } else {
+          // A failed handshake is usually Screen Sharing being off, or the
+          // session cookie having expired (the proxy answers 401/502).
+          setStatus('Cannot connect — is Screen Sharing on, and are you paired?', false);
+        }
+      });
+      rfb.addEventListener('credentialsrequired', () => {
+        login.classList.add('show');
+        setStatus('Waiting for Mac login…', false);
+        (userEl.value ? passEl : userEl).focus();
+      });
+      rfb.addEventListener('securityfailure', (e) => {
+        setStatus('Login failed: ' + (e.detail.reason || 'wrong user name or password'), false);
+      });
+      rfb.addEventListener('desktopname', (e) => {
+        if (connected) setStatus('Connected · ' + e.detail.name, true);
+      });
+    }
+
+    document.getElementById('login-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      try { localStorage.setItem('vnc-user', userEl.value); } catch (err) {}
+      rfb.sendCredentials({ username: userEl.value, password: passEl.value });
+      passEl.value = '';
+      login.classList.remove('show');
+      setStatus('Logging in…', false);
+    });
+
+    document.getElementById('btn-reconnect').addEventListener('click', connect);
+
+    panBtn.addEventListener('click', () => {
+      if (!rfb) return;
+      const zoom = rfb.scaleViewport;
+      rfb.scaleViewport = !zoom;
+      rfb.clipViewport = zoom;
+      rfb.dragViewport = zoom;
+      panBtn.classList.toggle('on', zoom);
+      panBtn.textContent = zoom ? '✋ Pan' : '🔍 1:1';
+    });
+
+    cmdBtn.addEventListener('click', () => {
+      cmdOn = !cmdOn;
+      cmdBtn.classList.toggle('on', cmdOn);
+    });
+
+    // Send one key, wrapped in ⌘ when the sticky Command button is on.
+    function press(keysym) {
+      if (!rfb || !connected) return;
+      if (cmdOn) rfb.sendKey(XK_SUPER_L, 'MetaLeft', true);
+      rfb.sendKey(keysym);
+      if (cmdOn) {
+        rfb.sendKey(XK_SUPER_L, 'MetaLeft', false);
+        cmdOn = false;
+        cmdBtn.classList.remove('on');
+      }
+    }
+
+    function keysymFor(ch) {
+      const cp = ch.codePointAt(0);
+      if (ch === '\n') return XK_RETURN;
+      // Latin-1 keysyms equal their code points; everything else uses the
+      // Unicode keysym range so Vietnamese text arrives intact.
+      return cp < 0x100 ? cp : 0x01000000 | cp;
+    }
+
+    document.querySelectorAll('#keys [data-keysym]').forEach((btn) => {
+      btn.addEventListener('click', () => press(parseInt(btn.dataset.keysym, 10)));
+    });
+
+    // The phone keyboard only opens for a focused text field, so typing goes
+    // through a hidden textarea and is forwarded key by key. A sentinel space
+    // keeps Backspace firing even when nothing has been typed yet.
+    const SENTINEL = ' ';
+    function resetKbd() { kbd.value = SENTINEL; kbd.setSelectionRange(1, 1); }
+
+    document.getElementById('btn-kbd').addEventListener('click', () => {
+      resetKbd();
+      kbd.focus();
+    });
+
+    kbd.addEventListener('beforeinput', (e) => {
+      e.preventDefault();
+      switch (e.inputType) {
+        case 'insertText':
+        case 'insertReplacementText':
+          for (const ch of (e.data || '')) press(keysymFor(ch));
+          break;
+        case 'insertLineBreak':
+        case 'insertParagraph':
+          press(XK_RETURN);
+          break;
+        case 'deleteContentBackward':
+          press(XK_BACKSPACE);
+          break;
+      }
+      resetKbd();
+    });
+
+    connect();
+  </script>
+</body>
+</html>
