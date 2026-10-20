@@ -1,11 +1,15 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -58,6 +62,41 @@ func (s *Server) handleVNC(w http.ResponseWriter, r *http.Request) {
 	log.Printf("VNC session closed")
 }
 
+// pbcopyPath is swapped out in tests.
+var pbcopyPath = "/usr/bin/pbcopy"
+
+const maxClipboardBytes = 64 * 1024
+
+// handleClipboard puts text on the Mac clipboard so the screen page can paste
+// it with ⌘V. Screen Sharing drops Unicode keysyms, so Vietnamese (or any
+// non-ASCII text) typed key by key never arrives; a paste always does.
+func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
+	// Requiring JSON forces a CORS preflight, so a foreign page cannot fire
+	// this as a simple form post riding the session cookie.
+	if r.Method != http.MethodPost || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		writeJSONError(w, http.StatusBadRequest, "POST application/json only")
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxClipboardBytes+1)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON or text too long")
+		return
+	}
+	cmd := exec.Command(pbcopyPath)
+	// pbcopy reads stdin in the locale's encoding; launchd gives us no LANG,
+	// which would turn every non-ASCII character into garbage.
+	cmd.Env = childEnv()
+	cmd.Stdin = strings.NewReader(body.Text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("pbcopy: %v %s", err, out)
+		writeJSONError(w, http.StatusInternalServerError, "could not set the clipboard")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func pipeVNC(ws *websocket.Conn, conn net.Conn) {
 	defer ws.Close()
 	defer conn.Close()
@@ -88,7 +127,8 @@ func pipeVNC(ws *websocket.Conn, conn net.Conn) {
 				}
 			}
 			if err != nil {
-				if err != io.EOF {
+				// net.ErrClosed is the other goroutine closing on a normal hang-up.
+				if err != io.EOF && !errors.Is(err, net.ErrClosed) {
 					log.Printf("VNC read: %v", err)
 				}
 				return

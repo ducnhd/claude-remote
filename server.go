@@ -74,6 +74,7 @@ func (s *Server) registerRoutes() {
 	// Protected API + WebSocket routes (require JWT)
 	s.mux.Handle("/ws/term", s.protect(s.terminal.WebSocketHandler()))
 	s.mux.Handle("/ws/vnc", s.protect(s.handleVNC))
+	s.mux.Handle("/api/clipboard", s.protect(s.handleClipboard))
 	s.mux.Handle("/api/claude/start", s.protect(s.handleClaudeStart))
 	s.mux.Handle("/api/claude/status", s.protect(s.handleClaudeStatus))
 	s.mux.Handle("/api/files", s.protect(s.files.HandleList))

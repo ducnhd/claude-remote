@@ -4,15 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Claude Remote · Screen</title>
-  <link rel="stylesheet" href="/style.css">
+  <!-- Self-contained on purpose: the page must lay out even if style.css fails. -->
   <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; }
+    body { display: flex; flex-direction: column; overflow: hidden; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.connected { background: #4ade80; }
+    .dot.disconnected { background: #f87171; }
     #screen-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16213e; flex-shrink: 0; }
     #screen-bar a, #screen-bar button { padding: 6px 12px; border: 1px solid #444; background: none; color: #eee; border-radius: 4px; font-size: 14px; text-decoration: none; }
     #screen-status { font-size: 12px; color: #888; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #vnc { flex: 1; overflow: hidden; background: #000; position: relative; }
+    #vnc { flex: 1; overflow: hidden; background: #000; position: relative; touch-action: none; }
     #keys { display: flex; gap: 6px; padding: 6px 8px; background: #16213e; overflow-x: auto; flex-shrink: 0; }
     #keys button { flex-shrink: 0; padding: 8px 12px; border: 1px solid #444; background: #1a1a2e; color: #eee; border-radius: 6px; font-size: 14px; }
     #keys button.on { background: #60a5fa; color: #000; border-color: #60a5fa; }
+    #text-bar { display: flex; gap: 6px; padding: 6px 8px 10px; background: #16213e; flex-shrink: 0; }
+    #text-input { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 6px; border: 1px solid #444; background: #1a1a2e; color: #eee; font-size: 16px; }
+    #text-bar button { flex-shrink: 0; padding: 8px 12px; border-radius: 6px; border: none; background: #60a5fa; color: #000; font-size: 14px; font-weight: 600; }
+    #text-bar button.secondary { background: #1a1a2e; color: #eee; border: 1px solid #444; font-weight: 400; }
     #kbd-input { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
     #login { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.7); z-index: 10; }
     #login.show { display: flex; }
@@ -31,6 +41,9 @@
     <button id="btn-reconnect" type="button">↻</button>
   </div>
 
+  <!-- Touch: tap = click, long press = right click, pinch = zoom,
+       one-finger drag = pan when zoomed (drag the mouse when not),
+       two-finger drag = scroll. -->
   <div id="vnc">
     <div id="login">
       <form id="login-form">
@@ -43,10 +56,9 @@
     </div>
   </div>
 
-  <!-- Touch: tap = click, long press = right click, two-finger drag = scroll. -->
   <div id="keys">
-    <button id="btn-kbd" type="button">⌨</button>
-    <button id="btn-pan" type="button" title="Zoom 1:1 and drag to pan">🔍 1:1</button>
+    <button id="btn-kbd" type="button" title="Type live, key by key">⌨</button>
+    <button id="btn-fit" type="button" title="Fit the whole screen">⤢ Fit</button>
     <button id="btn-cmd" type="button">⌘</button>
     <button type="button" data-keysym="65307">Esc</button>
     <button type="button" data-keysym="65289">Tab ⇥</button>
@@ -57,14 +69,24 @@
     <button type="button" data-keysym="65361">←</button>
     <button type="button" data-keysym="65363">→</button>
   </div>
+  <!-- Screen Sharing drops non-ASCII keys, so text is pasted via the Mac
+       clipboard. A normal input keeps the phone's Vietnamese IME working. -->
+  <form id="text-bar">
+    <input id="text-input" placeholder="Type text to paste (tiếng Việt OK)" autocomplete="off">
+    <button id="btn-paste" type="button" class="secondary">Paste</button>
+    <button type="submit">Paste ↵</button>
+  </form>
   <textarea id="kbd-input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>
 
   <script type="module">
-    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/lib/rfb.js/+esm';
+    // noVNC ships CommonJS; jsDelivr's ESM wrapper puts the class one level down.
+    import rfbModule from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/lib/rfb.js/+esm';
+    const RFB = rfbModule.default || rfbModule;
 
     const XK_SUPER_L = 0xffeb; // noVNC maps the Meta key here; Screen Sharing reads it as ⌘
     const XK_BACKSPACE = 0xff08;
     const XK_RETURN = 0xff0d;
+    const XK_V = 0x0076;
 
     const vncEl = document.getElementById('vnc');
     const statusEl = document.getElementById('screen-status');
@@ -74,7 +96,7 @@
     const passEl = document.getElementById('login-pass');
     const kbd = document.getElementById('kbd-input');
     const cmdBtn = document.getElementById('btn-cmd');
-    const panBtn = document.getElementById('btn-pan');
+    const textInput = document.getElementById('text-input');
 
     let rfb = null;
     let cmdOn = false;
@@ -93,15 +115,21 @@
       setStatus('Connecting…', false);
       const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/vnc';
       rfb = new RFB(vncEl, url, { wsProtocols: ['binary'] });
-      rfb.scaleViewport = true;
+      // Zoom is driven by our own gestures below, so noVNC only clips.
+      rfb.scaleViewport = false;
+      rfb.clipViewport = true;
       rfb.qualityLevel = 6;
       rfb.compressionLevel = 2;
+      // noVNC's built-in touch gestures would fight the pinch/pan handler.
+      rfb._gestures.detach();
       rfb.addEventListener('connect', () => {
         connected = true;
         login.classList.remove('show');
         setStatus('Connected', true);
+        // noVNC sizes the framebuffer after this event; fit once it has.
+        setTimeout(fit, 300);
       });
-      rfb.addEventListener('disconnect', (e) => {
+      rfb.addEventListener('disconnect', () => {
         login.classList.remove('show');
         if (connected) {
           setStatus('Disconnected — tap ↻ to reconnect', false);
@@ -135,16 +163,140 @@
 
     document.getElementById('btn-reconnect').addEventListener('click', connect);
 
-    panBtn.addEventListener('click', () => {
-      if (!rfb) return;
-      const zoom = rfb.scaleViewport;
-      rfb.scaleViewport = !zoom;
-      rfb.clipViewport = zoom;
-      rfb.dragViewport = zoom;
-      panBtn.classList.toggle('on', zoom);
-      panBtn.textContent = zoom ? '✋ Pan' : '🔍 1:1';
-    });
+    // --- Zoom and pan ---
+    // noVNC exposes only "fit" or 1:1, so this drives its Display directly:
+    // the viewport is the framebuffer region shown, scale maps it to pixels.
+    const MAX_ZOOM = 4;
+    let zoom = 1;
 
+    function display() { return rfb && rfb._display; }
+    function fbSize() { const d = display(); return { w: d.width, h: d.height }; }
+    function boxSize() { return { w: vncEl.clientWidth, h: vncEl.clientHeight }; }
+    function fitScale() {
+      const fb = fbSize(), box = boxSize();
+      return fb.w && fb.h ? Math.min(box.w / fb.w, box.h / fb.h) : 1;
+    }
+
+    // Set the zoom so the framebuffer point under (ex, ey) — coordinates
+    // relative to the canvas — stays under the finger.
+    function setZoom(z, ex, ey) {
+      const d = display();
+      if (!d || !d.width) return;
+      const min = fitScale();
+      z = Math.max(min, Math.min(MAX_ZOOM, z));
+      const vp = d._viewportLoc;
+      const old = d.scale || 1;
+      const fx = vp.x + (ex ?? 0) / old;
+      const fy = vp.y + (ey ?? 0) / old;
+      const box = boxSize();
+      d.viewportChangeSize(box.w / z, box.h / z);
+      d.scale = z;
+      d.viewportChangePos(fx - (ex ?? 0) / z - vp.x, fy - (ey ?? 0) / z - vp.y);
+      zoom = z;
+    }
+
+    function panBy(dxPx, dyPx) {
+      const d = display();
+      if (d) d.viewportChangePos(-dxPx / zoom, -dyPx / zoom);
+    }
+
+    function fit() { setZoom(0, 0, 0); }
+    function isZoomed() { return zoom > fitScale() * 1.02; }
+
+    document.getElementById('btn-fit').addEventListener('click', fit);
+    // noVNC resets scale and viewport on resize; put ours back afterwards.
+    window.addEventListener('resize', () => setTimeout(() => setZoom(zoom, 0, 0), 250));
+
+    // --- Touch input ---
+    const TAP_MOVE = 10;       // px a finger may drift and still count as a tap
+    const LONG_PRESS_MS = 550;
+    const SCROLL_STEP = 24;    // px of two-finger travel per wheel notch
+    const BTN_LEFT = 1, BTN_RIGHT = 4, WHEEL_UP = 8, WHEEL_DOWN = 16;
+
+    let g = null; // current gesture
+
+    function canvasPos(t) {
+      const r = rfb._canvas.getBoundingClientRect();
+      return { x: t.clientX - r.left, y: t.clientY - r.top };
+    }
+    function mid(a, b) { return { clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2 }; }
+    function dist(a, b) { return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+    function mouse(p, mask) { if (connected) rfb._sendMouse(p.x, p.y, mask); }
+    function click(p, button) { mouse(p, button); mouse(p, 0); }
+
+    vncEl.addEventListener('touchstart', (e) => {
+      if (!connected || login.classList.contains('show')) return;
+      e.preventDefault();
+      const ts = e.touches;
+      if (ts.length === 1) {
+        const t = ts[0];
+        g = { mode: 'pending', start: t, last: t };
+        g.timer = setTimeout(() => {
+          if (g && g.mode === 'pending') { click(canvasPos(t), BTN_RIGHT); g.mode = 'done'; }
+        }, LONG_PRESS_MS);
+      } else if (ts.length === 2) {
+        if (g) {
+          clearTimeout(g.timer);
+          if (g.mode === 'drag') mouse(canvasPos(g.last), 0);
+        }
+        const m = mid(ts[0], ts[1]);
+        g = { mode: 'two', dist0: dist(ts[0], ts[1]), zoom0: zoom, mid0: m, last: m, acc: 0 };
+      }
+    }, { passive: false });
+
+    vncEl.addEventListener('touchmove', (e) => {
+      if (!g) return;
+      e.preventDefault();
+      const ts = e.touches;
+      if (ts.length === 1 && g.start) {
+        const t = ts[0];
+        if (g.mode === 'pending' && Math.hypot(t.clientX - g.start.clientX, t.clientY - g.start.clientY) > TAP_MOVE) {
+          clearTimeout(g.timer);
+          // Zoomed in, a drag moves the view; at fit it drags the mouse.
+          g.mode = isZoomed() ? 'pan' : 'drag';
+          if (g.mode === 'drag') mouse(canvasPos(g.start), BTN_LEFT);
+        }
+        if (g.mode === 'pan') panBy(t.clientX - g.last.clientX, t.clientY - g.last.clientY);
+        if (g.mode === 'drag') mouse(canvasPos(t), BTN_LEFT);
+        g.last = t;
+      } else if (ts.length === 2 && (g.mode === 'two' || g.mode === 'pinch' || g.mode === 'scroll')) {
+        const m = mid(ts[0], ts[1]);
+        const d = dist(ts[0], ts[1]);
+        if (g.mode === 'two') {
+          // Lock to one meaning so a scroll never jitters the zoom.
+          if (Math.abs(d - g.dist0) > 24) g.mode = 'pinch';
+          else if (Math.hypot(m.clientX - g.mid0.clientX, m.clientY - g.mid0.clientY) > TAP_MOVE) g.mode = 'scroll';
+        }
+        if (g.mode === 'pinch') {
+          const p = canvasPos(m);
+          setZoom(g.zoom0 * d / g.dist0, p.x, p.y);
+          panBy(m.clientX - g.last.clientX, m.clientY - g.last.clientY);
+        } else if (g.mode === 'scroll') {
+          g.acc += m.clientY - g.last.clientY;
+          const p = canvasPos(m);
+          while (Math.abs(g.acc) >= SCROLL_STEP) {
+            // Natural scrolling: fingers moving down reveal content above.
+            click(p, g.acc > 0 ? WHEEL_UP : WHEEL_DOWN);
+            g.acc -= Math.sign(g.acc) * SCROLL_STEP;
+          }
+        }
+        g.last = m;
+      }
+    }, { passive: false });
+
+    function endTouch(e) {
+      if (!g) return;
+      e.preventDefault();
+      if (e.touches.length > 0) return; // wait until every finger is up
+      clearTimeout(g.timer);
+      if (g.mode === 'pending') click(canvasPos(g.start), BTN_LEFT);
+      if (g.mode === 'drag') mouse(canvasPos(g.last), 0);
+      g = null;
+    }
+    vncEl.addEventListener('touchend', endTouch, { passive: false });
+    vncEl.addEventListener('touchcancel', endTouch, { passive: false });
+
+    // --- Keyboard ---
     cmdBtn.addEventListener('click', () => {
       cmdOn = !cmdOn;
       cmdBtn.classList.toggle('on', cmdOn);
@@ -162,21 +314,46 @@
       }
     }
 
-    function keysymFor(ch) {
-      const cp = ch.codePointAt(0);
-      if (ch === '\n') return XK_RETURN;
-      // Latin-1 keysyms equal their code points; everything else uses the
-      // Unicode keysym range so Vietnamese text arrives intact.
-      return cp < 0x100 ? cp : 0x01000000 | cp;
+    // Put text on the Mac clipboard, then ⌘V it into the focused app.
+    let pasteQueue = Promise.resolve();
+    function pasteText(text) {
+      pasteQueue = pasteQueue.then(async () => {
+        if (!text || !connected) return;
+        const res = await fetch('/api/clipboard', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) { setStatus('Paste failed (' + res.status + ')', false); return; }
+        rfb.sendKey(XK_SUPER_L, 'MetaLeft', true);
+        rfb.sendKey(XK_V, 'KeyV');
+        rfb.sendKey(XK_SUPER_L, 'MetaLeft', false);
+      }).catch(() => setStatus('Paste failed', false));
+      return pasteQueue;
     }
+
+    async function sendTextBar(withEnter) {
+      const text = textInput.value;
+      if (!text) { if (withEnter) press(XK_RETURN); return; }
+      textInput.value = '';
+      await pasteText(text);
+      // Give the app a beat to take the paste before Enter submits it.
+      if (withEnter) setTimeout(() => press(XK_RETURN), 150);
+    }
+    document.getElementById('text-bar').addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendTextBar(true);
+    });
+    document.getElementById('btn-paste').addEventListener('click', () => sendTextBar(false));
 
     document.querySelectorAll('#keys [data-keysym]').forEach((btn) => {
       btn.addEventListener('click', () => press(parseInt(btn.dataset.keysym, 10)));
     });
 
-    // The phone keyboard only opens for a focused text field, so typing goes
-    // through a hidden textarea and is forwarded key by key. A sentinel space
-    // keeps Backspace firing even when nothing has been typed yet.
+    // Live typing: the phone keyboard only opens for a focused text field, so
+    // keys go through a hidden textarea. ASCII is sent as key presses; any
+    // other character is pasted, since Screen Sharing ignores Unicode keys.
+    // A sentinel space keeps Backspace firing even when nothing was typed.
     const SENTINEL = ' ';
     function resetKbd() { kbd.value = SENTINEL; kbd.setSelectionRange(1, 1); }
 
@@ -185,12 +362,26 @@
       kbd.focus();
     });
 
+    // Runs of non-ASCII are pasted; ASCII keys queue behind them to keep order.
+    function typeChars(text) {
+      let unicode = '';
+      for (const ch of text) {
+        if (ch.codePointAt(0) < 0x80) {
+          if (unicode) { pasteText(unicode); unicode = ''; }
+          pasteQueue = pasteQueue.then(() => press(ch === '\n' ? XK_RETURN : ch.codePointAt(0)));
+        } else {
+          unicode += ch;
+        }
+      }
+      if (unicode) pasteText(unicode);
+    }
+
     kbd.addEventListener('beforeinput', (e) => {
       e.preventDefault();
       switch (e.inputType) {
         case 'insertText':
         case 'insertReplacementText':
-          for (const ch of (e.data || '')) press(keysymFor(ch));
+          typeChars(e.data || '');
           break;
         case 'insertLineBreak':
         case 'insertParagraph':
