@@ -33,11 +33,16 @@ type Server struct {
 	authLimiter *limiter
 }
 
+// claudeArgs forces the inline renderer. With "tui": "fullscreen" in the
+// user's settings Claude switches to the alternate screen, which has no
+// scrollback, so the phone could never scroll back through earlier output.
+var claudeArgs = []string{"--settings", `{"tui":"default"}`}
+
 func NewServer(cfg *Config, auth *Auth) *Server {
 	return &Server{
 		config:      cfg,
 		auth:        auth,
-		terminal:    NewTerminalManager(cfg.ClaudePath, nil),
+		terminal:    NewTerminalManager(cfg.ClaudePath, claudeArgs),
 		files:       NewFileBrowser(cfg.AllowedDirs),
 		tunnel:      NewTunnelManager(cfg.Tunnel, cfg.Port),
 		mux:         http.NewServeMux(),

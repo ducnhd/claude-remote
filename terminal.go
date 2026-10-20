@@ -121,7 +121,8 @@ func (tm *TerminalManager) StartInDir(dir string) error {
 }
 
 func (tm *TerminalManager) StartWithResume(dir string) error {
-	return tm.start(dir, []string{"--continue"})
+	args := append(append([]string{}, tm.args...), "--continue")
+	return tm.start(dir, args)
 }
 
 func (tm *TerminalManager) start(dir string, args []string) error {
