@@ -3,6 +3,11 @@ INSTALL_PATH=$(HOME)/bin/$(BINARY)
 PLIST_NAME=com.claude-remote.plist
 PLIST_SRC=launchd/$(PLIST_NAME)
 PLIST_DST=$(HOME)/Library/LaunchAgents/$(PLIST_NAME)
+# Go's linker signs ad hoc, so every rebuild looks like a new app to macOS and
+# folder/Full Disk Access permissions get asked again. Signing with a stable
+# self-signed identity keeps them. Create it once (see README), or override.
+SIGN_IDENTITY?=claude-remote-signing
+SIGN_ID=com.claude-remote
 
 .PHONY: build run test test-race clean install uninstall restart logs
 
@@ -24,6 +29,12 @@ clean:
 install: build
 	mkdir -p $(HOME)/bin
 	cp $(BINARY) $(INSTALL_PATH)
+	@if security find-identity -p codesigning | grep -q '"$(SIGN_IDENTITY)"'; then \
+		codesign --force -s "$(SIGN_IDENTITY)" -i $(SIGN_ID) $(INSTALL_PATH) && \
+		echo "Signed with $(SIGN_IDENTITY)"; \
+	else \
+		echo "WARNING: no '$(SIGN_IDENTITY)' signing identity — macOS will re-ask for permissions after every install"; \
+	fi
 	# The server serves ./static next to the binary, so skipping this step
 	# means UI changes silently never reach the phone.
 	mkdir -p $(HOME)/bin/static

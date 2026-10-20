@@ -105,6 +105,31 @@ The launchd plist must include the directory containing the `claude` binary in i
 </dict>
 ```
 
+### Stop macOS re-asking for permissions
+
+Go signs binaries ad hoc, so each rebuild looks like a brand-new app and macOS asks again for Desktop/Documents (or Full Disk Access). `make install` signs with a `claude-remote-signing` identity when one exists. Create it once:
+
+```bash
+cat > /tmp/cs.cnf <<'EOF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = claude-remote-signing
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+EOF
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config /tmp/cs.cnf -keyout /tmp/cs.key -out /tmp/cs.pem
+openssl pkcs12 -export -legacy -inkey /tmp/cs.key -in /tmp/cs.pem -name claude-remote-signing -out /tmp/cs.p12 -passout pass:tmp
+security import /tmp/cs.p12 -k ~/Library/Keychains/login.keychain-db -P tmp -T /usr/bin/codesign
+rm /tmp/cs.cnf /tmp/cs.key /tmp/cs.pem /tmp/cs.p12
+```
+
+The certificate does not need to be trusted. Grant the permissions one last time after the first signed install.
+
 ## Session Handoff
 
 The killer feature: continue Claude Code sessions on your phone.
