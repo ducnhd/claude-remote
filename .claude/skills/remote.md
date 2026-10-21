@@ -7,7 +7,7 @@ user-invocable: true
 When the user invokes /handoff, follow these steps:
 
 1. Call the MCP tool `status` from the `claude-remote` server to check if the service is running.
-   - If the service is not reachable, tell the user: "claude-remote service is not running. Start it with: claude-remote serve"
+   - If the service is not reachable, tell the user: "claude-remote service is not running. Start it with: make restart (launchd) or claude-remote serve, then check claude-remote doctor"
 
 2. Call the MCP tool `handoff` from the `claude-remote` server with:
    - `dir`: set to the current working directory
@@ -15,4 +15,4 @@ When the user invokes /handoff, follow these steps:
 
 3. Display the QR code result exactly as returned (it contains ASCII art QR + URL).
 
-4. Tell the user: "Scan the QR code with your phone to continue this session. Token expires in 5 minutes."
+4. Tell the user: "Scan the QR code with your phone to continue this session. Token expires in 15 minutes."

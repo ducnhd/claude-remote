@@ -14,7 +14,10 @@
 make build          # Build binary
 make run            # Build + run locally
 make test           # Run all tests
-make install        # Build + install to ~/bin + load launchd (auto-templates plist)
+make test-race      # Run all tests with the race detector
+make install        # Build + sign + install binary and static/ to ~/bin + bootout/bootstrap launchd
+make restart        # Reload the launchd service without rebuilding
+make logs           # tail -f ~/.claude-remote/server.log
 make uninstall      # Unload launchd + remove binary
 ```
 
@@ -27,8 +30,9 @@ claude-remote revoke     # Regenerate secret, invalidate all sessions
 claude-remote install    # Install launchd plist + load
 claude-remote uninstall  # Unload + remove launchd plist
 claude-remote status     # Show running state, tunnel state, phone URL
-claude-remote qr         # Print a pairing QR for the running server (does not touch the secret)
+claude-remote qr         # Print a pairing QR for the running server (alias: pair; does not touch the secret)
 claude-remote doctor     # Diagnose every link in the connection chain and print fixes
+claude-remote version    # Print version
 ```
 
 ### MCP Registration (one-time)
@@ -37,7 +41,7 @@ claude-remote doctor     # Diagnose every link in the connection chain and print
 claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```
 
-MCP uses port 8823 (HTTP, localhost only). The main web UI uses port 8822 (HTTPS via Tailscale). The MCP listener always runs on `127.0.0.1:<port+1>`, with or without TLS, so MCP registration stays valid either way.
+MCP uses port 8823 (HTTP, localhost only). The main web UI uses port 8822 (plain HTTP on loopback behind cloudflared, or HTTPS on all interfaces in `"mode":"off"`). The MCP listener always runs on `127.0.0.1:<port+1>`, with or without TLS, so MCP registration stays valid either way.
 
 ### Triggering Handoff
 
@@ -51,7 +55,7 @@ Claude calls the `handoff` MCP tool and displays QR. In Claude Code CLI, `/hando
 
 ```
 Go binary (single process, two listeners when TLS active)
-├── main.go        # CLI entry point (setup/serve/revoke/install/uninstall/status)
+├── main.go        # CLI entry point (setup/serve/revoke/install/uninstall/status/qr/doctor)
 ├── paths.go       # Shared path safety: expandHome, resolvePath, pathWithin, withinAllowed
 ├── tunnel.go      # cloudflared supervisor: quick/named modes, URL detection, auto-restart
 ├── ratelimit.go   # Per-IP token bucket, clientIP/viaProxy/isSecureRequest helpers
@@ -63,18 +67,26 @@ Go binary (single process, two listeners when TLS active)
 │                  #   handoff tokens (15min expiry, one-time), auth logging
 ├── terminal.go    # WebSocket + pty: spawn claude in chosen dir or with --continue,
 │                  #   pipe stdin/stdout via startIO(), ring buffer, multi-client broadcast
+├── vnc.go         # /ws/vnc: byte pipe from noVNC to macOS Screen Sharing (127.0.0.1:5900),
+│                  #   /api/clipboard: pbcopy so non-ASCII text can be pasted with ⌘V
 ├── files.go       # File browser API (read-only, allowlist, ~ expansion)
 ├── config.go      # Config loading/saving (~/.claude-remote/)
 ├── static/        # Web UI (vanilla HTML/JS/CSS, no build step)
 │   ├── index.html # Three screens: folder picker → handoff selector → chat UI
 │   ├── app.js     # WebSocket, hidden xterm.js, cell-by-cell rendering, 80ms debounce,
 │   │              #   Vietnamese IME, handoff URL params, mode selector, auth error handling
+│   ├── screen.html# Self-contained Mac screen viewer/controller (noVNC from CDN), key bar,
+│   │              #   ⌘ modifier, Paste / Paste ↵ via /api/clipboard
 │   └── style.css  # Mobile-first dark theme
 ├── .claude/
 │   └── skills/
-│       └── remote.md  # /handoff skill — calls MCP handoff tool
+│       ├── remote.md       # /handoff skill — calls MCP handoff tool
+│       ├── architecture.md # Component map + design rules
+│       ├── auth-flow.md    # Pairing, handoff, cookie lifecycle
+│       ├── deployment.md   # make install, signing, tunnel modes, troubleshooting
+│       └── testing.md      # Test files + patterns
 └── launchd/
-    └── com.claude-remote.plist
+    └── com.claude-remote.plist  # __HOME__ placeholder, templated by `make install`
 ```
 
 ### Web UI Flow
@@ -97,13 +109,17 @@ Flow B: Handoff (URL params ?dir=...&mode=...)
   └── 📁 Choose another folder — go to folder picker
   ↓
   Screen 2: Chat UI
+
+Flow C: Mac screen (🖥 Screen button in the header → /screen.html)
+  noVNC → /ws/vnc → 127.0.0.1:5900 (macOS Screen Sharing, ARD login in-browser)
+  Text bar → POST /api/clipboard → pbcopy → ⌘V on the Mac
 ```
 
 ### Data Flow
 
 ```
 Phone browser (<textarea> → \r)
-  ↕ WebSocket (wss:// via Tailscale HTTPS, port 8822)
+  ↕ WebSocket (wss:// via Cloudflare Tunnel → 127.0.0.1:8822; or Tailscale HTTPS in mode off)
 Go server (terminal.go RingBuffer)
   ↕ pty (pseudo-terminal)
 claude CLI (spawned in user-selected directory)
@@ -125,7 +141,7 @@ Go server (mcp.go)
 - **`\r` not `\n`** — PTY expects carriage return
 - **Dynamic terminal cols** — calculated from screen width at runtime
 - **Quick action buttons** — y/n/Enter/Esc buttons for mobile (impossible on touch keyboard)
-- **Dual listener** — HTTPS:8822 for phone, HTTP:8823 for MCP. Claude Code MCP client can't use Tailscale certs
+- **Dual listener** — public :8822 for phone, loopback HTTP :8823 for MCP + pairing. Claude Code MCP client can't use Tailscale certs
 - **Handoff tokens** — 15 min expiry (`handoffTokenTTL`), one-time, in memory. Setup tokens expire after 30 min (`setupTokenTTL`) and are compared in constant time
 - **Component-wise path checks** — `pathWithin()` matches on path components, never a raw string prefix: `~/Desktop-secret` must not pass for allowed root `~/Desktop`, and an unresolvable root never matches everything
 - **Session generation counter** — `TerminalManager.gen` invalidates goroutines of a stopped session so a restart is not torn down by the previous pty's exit handler
@@ -136,6 +152,15 @@ Go server (mcp.go)
 - **MCP localhost-only** — `/mcp` rejects non-loopback IPs
 - **Absolute claude_path** — config.json must use absolute path (e.g., `/Users/you/.local/bin/claude`); launchd PATH may not include `~/.local/bin`
 - **startIO() shared** — both StartInDir and StartWithResume use same goroutine pattern; process exit is logged
+- **`childEnv()` for child processes** — launchd gives the server no `TERM`/`LANG` and a minimal `PATH`; passing `os.Environ()` straight through left the Claude TUI unable to read keystrokes and made `pbcopy` mangle non-ASCII. `childEnv()` fills `TERM=xterm-256color`, `COLORTERM`, `LANG=en_US.UTF-8` and prepends `~/.local/bin`, `~/bin`, Homebrew dirs to `PATH`
+- **Inline TUI forced** — `claudeArgs` passes `--settings {"tui":"default"}` (also on `--continue`). The fullscreen TUI uses the alternate screen, which has no scrollback, so the phone could not scroll back
+- **`Cache-Control: no-cache` on static** — `noStore()` wrapper; mobile Safari otherwise serves a stale `app.js` for months
+- **Access log** — `accessLog()` logs every public request (`REQ ... → status`), its `statusRecorder` implements `Hijack` so WebSocket upgrades still work
+- **`/local/pair` refuses while the tunnel is down** — returns 503 instead of minting a LAN-only QR
+- **VNC bridge** — `/ws/vnc` only ever dials loopback `:5900`; both it and its upgrader enforce same-origin because the socket is authenticated by cookie alone. The macOS ARD login still happens end to end in noVNC
+- **Clipboard paste instead of typing** — Screen Sharing drops Unicode keysyms, so Vietnamese typed key by key never arrives. `/api/clipboard` (POST, `application/json` only to force a CORS preflight, 64KB cap) runs `pbcopy` and the page sends ⌘V
+- **Stable code signing** — Go signs ad hoc, so every rebuild re-triggers macOS folder / Full Disk Access prompts. `make install` signs with the `claude-remote-signing` identity (override `SIGN_IDENTITY`) when it exists
+- **launchd reload = bootout + wait + bootstrap** — `launchctl load` on a loaded job keeps the old plist and `kickstart` then dies with EX_CONFIG(78); bootout is async, so wait for the label to disappear first
 
 ### Network
 
@@ -164,9 +189,10 @@ Default: cloudflared quick tunnel. The server spawns `cloudflared tunnel --url h
 ```
 ~/.claude-remote/
 ├── secret.key      # JWT signing secret (256-bit)
-├── config.json     # port, allowed_dirs, claude_path (MUST be absolute)
+├── config.json     # port, allowed_dirs, claude_path (MUST be absolute),
+│                   #   tunnel {mode: quick|named|off, bin, hostname, token}
 ├── sessions.json   # active device list
-├── *.crt / *.key   # Tailscale TLS certificates
+├── *.crt / *.key   # Tailscale TLS certificates (mode off only)
 └── server.log      # stdout/stderr from launchd service
 ```
 
@@ -175,7 +201,7 @@ Default: cloudflared quick tunnel. The server spawns `cloudflared tunnel --url h
 | Route | Method | Auth | Purpose |
 |-------|--------|------|---------|
 | `/auth/scan` | GET | No | QR token exchange → clear old cookie → set JWT → redirect / |
-| `/health` | GET | No | Health check `{"status":"ok"}` |
+| `/health` | GET | No | Health check `{"status":"ok","version":"..."}` |
 | `/mcp` | POST | Localhost | MCP Streamable HTTP (JSON-RPC) — handoff + status tools. **Loopback listener only** |
 | `/handoff` | GET | Token | Handoff token exchange → clear old cookie → set JWT → redirect |
 | `/local/pair` | POST | Localhost | Mint a pairing URL for `claude-remote qr` |
@@ -185,6 +211,8 @@ Default: cloudflared quick tunnel. The server spawns `cloudflared tunnel --url h
 | `/api/files` | GET | JWT | List directory |
 | `/api/files/read` | GET | JWT | Read file content |
 | `/ws/term` | WS | JWT | Terminal WebSocket (binary I/O to pty) |
+| `/ws/vnc` | WS | JWT + same-origin | noVNC ↔ macOS Screen Sharing (`127.0.0.1:5900`); 502 if Screen Sharing is off |
+| `/api/clipboard` | POST | JWT | `{"text":"..."}` (JSON only, ≤64KB) → `pbcopy` on the Mac |
 | `/*` | GET | No | Static files (HTML/JS/CSS) |
 
 ### MCP Tools
@@ -196,11 +224,11 @@ Default: cloudflared quick tunnel. The server spawns `cloudflared tunnel --url h
 
 ## Code Conventions
 
-- **Go 1.25+**, module name `claude-remote`
+- **Go 1.25+**, module `github.com/ducnhd/claude-remote` (single `package main`)
 - **Short receivers**: `(s *Server)`, `(a *Auth)`, `(tm *TerminalManager)`
 - **Error wrapping**: `fmt.Errorf("context: %w", err)`
 - **No frameworks**: stdlib `net/http` + minimal deps
-- **Frontend**: Vanilla JS, no build step. xterm.js from CDN (hidden, ANSI processing only)
+- **Frontend**: Vanilla JS, no build step. xterm.js and noVNC (`@novnc/novnc@1.5.0` ESM) from CDN. `screen.html` keeps its CSS inline so it lays out even if `style.css` fails
 - **Security-first file browser**: allowlist dirs, block dotfiles, no write ops, reject `..`, symlink resolution
 - **Additive changes**: new features use new routes/screens/methods; existing behavior stays untouched
 - **Auth logging**: middleware logs denied requests with path + reason for debugging
@@ -214,7 +242,7 @@ Default: cloudflared quick tunnel. The server spawns `cloudflared tunnel --url h
 | golang-jwt/jwt/v5 | JWT auth |
 | skip2/go-qrcode | QR code in terminal + MCP handoff |
 
-External: Tailscale (installed separately), xterm.js + xterm-addon-fit (CDN).
+External: cloudflared (`brew install cloudflared`, default transport), Tailscale (only for `mode: off`), macOS Screen Sharing (only for the screen page), xterm.js + xterm-addon-fit + noVNC (CDN).
 
 ## Testing
 
@@ -223,22 +251,30 @@ go test ./... -v -count=1       # All tests
 go test -race ./... -v -count=1 # With race detector
 ```
 
-Test files: `auth_test.go`, `config_test.go`, `files_test.go`, `terminal_test.go`, `server_test.go`, `mcp_test.go`, `integration_test.go`.
+Test files: `auth_test.go`, `config_test.go`, `files_test.go`, `paths_test.go`, `ratelimit_test.go`, `terminal_test.go`, `tunnel_test.go`, `server_test.go`, `mcp_test.go`, `vnc_test.go`, `integration_test.go`.
 
 ## Deployment
 
 Local Mac only. Auto-starts on boot via launchd.
 
 ```bash
-# Tailscale HTTPS setup
-sudo tailscale cert <hostname>.ts.net
-sudo cp ~/Desktop/<hostname>.ts.net.* ~/.claude-remote/
-sudo chown $(whoami) ~/.claude-remote/*.key
+brew install cloudflared            # default transport (quick tunnel)
 
-# Set absolute claude path in config
-# Edit ~/.claude-remote/config.json:
-# "claude_path": "/Users/yourname/.local/bin/claude"
+# One-time: stable signing identity so macOS keeps folder/FDA permissions
+# across rebuilds (openssl + security import recipe in README)
+
+make install                        # build, sign, copy binary + static/ to ~/bin,
+                                    # template plist, bootout/bootstrap launchd
+claude-remote setup                 # generate secret (first time only)
+claude-remote qr                    # pairing QR for the live tunnel URL
+claude-remote doctor                # if anything fails
+
+# config.json: "claude_path" MUST be absolute, e.g. /Users/yourname/.local/bin/claude
 
 # Register MCP (one-time, user scope — persists across all projects)
 claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```
+
+`make install` copies `static/` next to the binary; the server serves `<binary dir>/static`, so skipping that step means UI changes never reach the phone.
+
+Tailscale (`"tunnel": {"mode":"off"}`) still needs `sudo tailscale cert <hostname>.ts.net` and the cert/key copied into `~/.claude-remote/` (chown to your user).

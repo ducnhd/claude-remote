@@ -1,102 +1,79 @@
 ---
 name: deployment
-description: Local Mac deployment — Tailscale HTTPS with cert discovery, launchd auto-start, install/uninstall
+description: Local Mac deployment — make install (sign, static copy, launchd bootout/bootstrap), cloudflared tunnel modes, Screen Sharing, troubleshooting
 ---
 
 # Deployment
 
 ## Prerequisites
 
-1. Go 1.25+ installed
-2. Tailscale installed on Mac + phone (both on same tailnet)
-3. MagicDNS enabled in Tailscale admin console
-4. `claude` CLI in PATH
+1. Go 1.25+
+2. `brew install cloudflared` (default transport). Tailscale only for `"tunnel": {"mode":"off"}`
+3. `claude` CLI installed; its **absolute** path in `config.json` → `claude_path`
+4. Optional: macOS Screen Sharing on (System Settings → General → Sharing) for the 🖥 Screen page
+5. Optional but recommended: `claude-remote-signing` code-signing identity (recipe in README) so macOS stops re-asking for folder / Full Disk Access after each rebuild
 
-## Install
+## Install / Update
 
 ```bash
 make install
-# 1. go build -o /usr/local/bin/claude-remote .
-# 2. cp launchd/com.claude-remote.plist ~/Library/LaunchAgents/
-# 3. launchctl load ~/Library/LaunchAgents/com.claude-remote.plist
 ```
 
-Then first-time setup:
+What it does:
+1. `go build`, copy to `~/bin/claude-remote`
+2. `codesign -s claude-remote-signing -i com.claude-remote` if the identity exists (override with `SIGN_IDENTITY=…`), else warns
+3. Copy `static/` → `~/bin/static/` (server serves `<binary dir>/static`; skip this and UI changes never land)
+4. Template `launchd/com.claude-remote.plist` (`__HOME__` → `$HOME`) into `~/Library/LaunchAgents/`
+5. `launchctl bootout` → wait until the label is gone → `bootstrap` (retry once) → verify running
+
+Never use `launchctl load`/`kickstart` for reinstalls: `load` keeps the old plist and `kickstart` then exits EX_CONFIG(78).
+
+First time only:
 ```bash
-claude-remote setup    # generates secret + shows QR code
-claude-remote serve    # start server (or let launchd handle it)
+claude-remote setup     # secret
+claude-remote qr        # pairing QR (needs the running server + live tunnel)
+claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```
 
-## Tailscale HTTPS Setup
+## Other targets
 
-```bash
-# Get Mac's Tailscale hostname
-tailscale status --json | jq -r '.Self.DNSName'
+| Command | Purpose |
+|---------|---------|
+| `make restart` | bootout + bootstrap without rebuilding |
+| `make logs` | `tail -f ~/.claude-remote/server.log` |
+| `make uninstall` | unload, remove plist + binary |
+| `claude-remote status` | running state, tunnel state, phone URL |
+| `claude-remote doctor` | checks every link, prints fixes |
 
-# Generate TLS cert
-sudo tailscale cert <hostname>.ts.net
-# Creates: <hostname>.ts.net.crt + <hostname>.ts.net.key
+## Tunnel modes (`config.json` → `tunnel`)
 
-# Cert files are owned by root — either:
-# Option A: Copy to config dir
-sudo cp ~/Desktop/<hostname>.ts.net.* ~/.claude-remote/
-sudo chown $(whoami) ~/.claude-remote/*.key ~/.claude-remote/*.crt
-
-# Option B: Run server with sudo (not recommended)
-```
-
-### TLS Certificate Discovery
-
-Server searches these directories for `*.crt` + matching `*.key`:
-1. `~/.claude-remote/`
-2. `~/Desktop/`
-3. `/var/run/tailscale/`
-4. `~/.local/share/tailscale/certs/`
-
-Falls back to HTTP with warning if no valid cert+key pair found.
+| Mode | Notes |
+|------|-------|
+| `quick` (default) | random `*.trycloudflare.com`; changes on every cloudflared restart → re-run `qr` |
+| `named` | `hostname` + `token`; stable URL |
+| `off` | binds `0.0.0.0:8822`, needs TLS certs (`sudo tailscale cert <host>.ts.net`, copy `.crt`/`.key` to `~/.claude-remote/`, chown) |
 
 ## Verify
 
 ```bash
-claude-remote status
-# Claude Remote v0.1.0
-# Config dir: ~/.claude-remote
-# Port: 8822
-# Secret: configured
-# Tailscale: <hostname>.ts.net
-
-curl https://<hostname>.ts.net:8822/health
-# {"status":"ok","version":"0.1.0"}
+claude-remote doctor
+curl http://127.0.0.1:8823/health     # {"status":"ok","version":"0.1.0"}
+grep 'REQ ' ~/.claude-remote/server.log | tail   # did the phone reach us?
 ```
-
-## Uninstall
-
-```bash
-make uninstall
-# 1. launchctl unload ~/Library/LaunchAgents/com.claude-remote.plist
-# 2. rm ~/Library/LaunchAgents/com.claude-remote.plist
-# 3. rm /usr/local/bin/claude-remote
-```
-
-## Logs
-
-```bash
-tail -f ~/.claude-remote/server.log
-```
-
-## Static Files
-
-When running via `go run`, static files are served from `$CWD/static/`. When running the compiled binary, from `$BINARY_DIR/static/`. The server logs which directory is used: `Serving static files from <path>`.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| Service not starting | `launchctl list \| grep claude-remote` |
-| Port in use | Change port in `~/.claude-remote/config.json` |
-| Claude not found | Set `claude_path` in config.json |
-| TLS cert expired | Re-run `sudo tailscale cert <hostname>.ts.net` |
-| TLS key permission denied | `sudo chown $(whoami) ~/.claude-remote/*.key` |
-| QR shows http:// not https:// | Cert not in discoverable location — copy to ~/.claude-remote/ |
-| Phone shows 401 unauthorized | Token consumed — re-run `setup` for fresh QR |
-| Old session content showing | Server bug if RingBuffer not cleared — restart server |
+| Service not starting | `make logs`; `launchctl list \| grep claude-remote` |
+| Phone types but Claude ignores keys | Missing `TERM`/`LANG` in child env — `childEnv()` must be used for every spawned process |
+| Phone can't scroll back | Claude must run with `--settings {"tui":"default"}` (fullscreen TUI = alternate screen, no scrollback) |
+| UI change not visible on phone | Run `make install` (copies `static/`); static is `no-cache` so a reload suffices |
+| `qr` fails with 503 | Tunnel still starting; retry or `doctor` |
+| Old quick-tunnel URL dead | cloudflared restarted → `claude-remote qr` |
+| Screen page: "Screen Sharing is off" | Enable Screen Sharing on the Mac |
+| Vietnamese text lost on screen page | Use the Paste bar, not live typing (Screen Sharing drops Unicode keysyms) |
+| macOS re-asks folder permissions | Create the signing identity, `make install`, grant once more |
+| Claude not found | `claude_path` must be absolute |
+| TLS cert expired (mode off) | Server skips it with a warning; re-run `sudo tailscale cert` |
+| Phone 401 | Re-pair with `claude-remote qr` |
