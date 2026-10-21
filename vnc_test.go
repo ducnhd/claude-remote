@@ -160,3 +160,38 @@ func TestClipboardRejectsFormPost(t *testing.T) {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestScreenWakeAndLock(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	oldWake, oldLock := wakeCmd, lockCmd
+	wakeCmd = []string{"/bin/sh", "-c", "echo wake >> " + marker}
+	lockCmd = []string{"/bin/sh", "-c", "echo lock >> " + marker}
+	t.Cleanup(func() { wakeCmd, lockCmd = oldWake, oldLock })
+
+	s := &Server{}
+	for _, h := range []http.HandlerFunc{s.handleWake, s.handleLock} {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+		}
+	}
+	got, _ := os.ReadFile(marker)
+	if string(got) != "wake\nlock\n" {
+		t.Errorf("commands ran = %q", got)
+	}
+}
+
+func TestScreenLockRejectsGet(t *testing.T) {
+	old := lockCmd
+	lockCmd = []string{"/usr/bin/false"} // must never run
+	t.Cleanup(func() { lockCmd = old })
+	s := &Server{}
+	rec := httptest.NewRecorder()
+	s.handleLock(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}

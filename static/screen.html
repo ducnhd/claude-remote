@@ -38,6 +38,8 @@
     <a href="/" title="Back to Claude">←</a>
     <span id="status-dot" class="dot disconnected"></span>
     <span id="screen-status">Connecting…</span>
+    <button id="btn-wake" type="button" title="Turn the Mac display on (shows the lock screen)">☀</button>
+    <button id="btn-lock" type="button" title="Lock the Mac">🔒</button>
     <button id="btn-reconnect" type="button">↻</button>
   </div>
 
@@ -126,6 +128,7 @@
         connected = true;
         login.classList.remove('show');
         setStatus('Connected', true);
+        screenCmd('wake'); // never start on a black, sleeping display
         // noVNC sizes the framebuffer after this event; fit once it has.
         setTimeout(fit, 300);
       });
@@ -162,6 +165,29 @@
     });
 
     document.getElementById('btn-reconnect').addEventListener('click', connect);
+
+    // A locked Mac usually has its display off, which Screen Sharing streams
+    // as plain black. Wake brings the lock screen back; Lock sleeps the
+    // display, which locks because the password is required immediately.
+    async function screenCmd(name) {
+      try {
+        const res = await fetch('/api/screen/' + name, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (!res.ok) throw new Error(res.status);
+        return true;
+      } catch (e) {
+        setStatus('Could not ' + name + ' the screen (' + e.message + ')', false);
+        return false;
+      }
+    }
+    document.getElementById('btn-wake').addEventListener('click', () => screenCmd('wake'));
+    document.getElementById('btn-lock').addEventListener('click', async () => {
+      if (!confirm('Lock the Mac now? You will need the Mac password to get back in.')) return;
+      if (await screenCmd('lock')) setStatus('Locked — tap ☀ then type your password with ⌨', connected);
+    });
 
     // --- Zoom and pan ---
     // noVNC exposes only "fit" or 1:1, so this drives its Display directly:

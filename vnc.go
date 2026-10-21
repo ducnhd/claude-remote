@@ -71,10 +71,7 @@ const maxClipboardBytes = 64 * 1024
 // it with ⌘V. Screen Sharing drops Unicode keysyms, so Vietnamese (or any
 // non-ASCII text) typed key by key never arrives; a paste always does.
 func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
-	// Requiring JSON forces a CORS preflight, so a foreign page cannot fire
-	// this as a simple form post riding the session cookie.
-	if r.Method != http.MethodPost || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-		writeJSONError(w, http.StatusBadRequest, "POST application/json only")
+	if !jsonPost(w, r) {
 		return
 	}
 	var body struct {
@@ -94,6 +91,49 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not set the clipboard")
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// jsonPost rejects anything but a JSON POST. Requiring JSON forces a CORS
+// preflight, so a foreign page cannot fire these endpoints as a simple form
+// post riding the session cookie.
+func jsonPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		writeJSONError(w, http.StatusBadRequest, "POST application/json only")
+		return false
+	}
+	return true
+}
+
+// Swapped out in tests.
+var (
+	wakeCmd = []string{"/usr/bin/caffeinate", "-u", "-t", "2"}
+	lockCmd = []string{"/usr/bin/pmset", "displaysleepnow"}
+)
+
+// handleWake turns the display back on. A locked Mac often has its display
+// off, and Screen Sharing then streams nothing but black; declaring user
+// activity brings back the lock screen so the password can be typed.
+func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
+	s.runScreenCmd(w, r, "wake", wakeCmd)
+}
+
+// handleLock sleeps the display. With "require password immediately" on, that
+// locks the Mac, so it can be left locked again after remote use.
+func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
+	s.runScreenCmd(w, r, "lock", lockCmd)
+}
+
+func (s *Server) runScreenCmd(w http.ResponseWriter, r *http.Request, name string, argv []string) {
+	if !jsonPost(w, r) {
+		return
+	}
+	if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
+		log.Printf("screen %s: %v %s", name, err, out)
+		writeJSONError(w, http.StatusInternalServerError, "could not "+name+" the screen")
+		return
+	}
+	log.Printf("screen %s from %s", name, clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
