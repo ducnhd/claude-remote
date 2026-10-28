@@ -176,35 +176,114 @@
   }
 
   // --- Start Claude ---
-  document.getElementById('btn-start').addEventListener('click', async () => {
-    if (!selectedDir) return;
-    const btn = document.getElementById('btn-start');
+  // body: { dir } for a fresh session, plus { session } to resume one.
+  async function startClaude(body, btn) {
+    const label = btn.textContent;
     btn.textContent = 'Starting...';
     btn.disabled = true;
-
     try {
       const resp = await fetch('/api/claude/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dir: selectedDir })
+        body: JSON.stringify(body)
       });
       const data = await resp.json();
       if (data.error) {
         alert('Error: ' + data.error);
-        btn.textContent = 'Start Claude';
-        btn.disabled = false;
         return;
       }
       showScreen('screen-chat');
-      setDirLabel('chat-dir', selectedDir);
+      setDirLabel('chat-dir', body.dir);
       // Clear old output
       document.getElementById('output-text').innerHTML = '';
       initTerminal();
       connectWS();
     } catch (e) {
       alert('Connection error: ' + e.message);
-      btn.textContent = 'Start Claude';
+    } finally {
+      btn.textContent = label;
       btn.disabled = false;
+    }
+  }
+
+  document.getElementById('btn-start').addEventListener('click', () => {
+    if (selectedDir) startClaude({ dir: selectedDir }, document.getElementById('btn-start'));
+  });
+
+  // --- History ---
+  let previewSession = null;
+
+  function timeAgo(iso) {
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    if (s < 7 * 86400) return Math.floor(s / 86400) + 'd ago';
+    return new Date(iso).toLocaleDateString();
+  }
+
+  async function showHistory() {
+    if (!selectedDir) return;
+    showScreen('screen-history');
+    setDirLabel('history-dir', selectedDir);
+    const list = document.getElementById('history-list');
+    list.innerHTML = '<div class="history-empty">Loading…</div>';
+    try {
+      const resp = await fetch('/api/sessions?dir=' + encodeURIComponent(selectedDir));
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      list.innerHTML = '';
+      if (!data.sessions.length) {
+        list.innerHTML = '<div class="history-empty">No past sessions in this folder</div>';
+        return;
+      }
+      data.sessions.forEach(sess => {
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        const title = sess.title || sess.first_prompt;
+        item.innerHTML =
+          '<div class="history-title">' + escapeHtml(title) + '</div>' +
+          (sess.title ? '<div class="history-prompt">' + escapeHtml(sess.first_prompt) + '</div>' : '') +
+          '<div class="history-meta">' + timeAgo(sess.updated) + ' · ' + sess.prompts +
+          (sess.prompts === 1 ? ' prompt' : ' prompts') + '</div>';
+        item.addEventListener('click', () => showPreview(sess));
+        list.appendChild(item);
+      });
+    } catch (e) {
+      list.innerHTML = '<div class="history-empty">Could not load history: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  async function showPreview(sess) {
+    previewSession = sess;
+    showScreen('screen-preview');
+    document.getElementById('preview-title').textContent = sess.title || sess.first_prompt;
+    const box = document.getElementById('preview-messages');
+    box.innerHTML = '<div class="history-empty">Loading…</div>';
+    try {
+      const resp = await fetch('/api/sessions/messages?dir=' + encodeURIComponent(selectedDir) +
+        '&id=' + encodeURIComponent(sess.id));
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      box.innerHTML = '';
+      data.messages.forEach(m => {
+        const div = document.createElement('div');
+        div.className = 'msg msg-' + m.role;
+        div.textContent = m.role === 'tool' ? '🔧 ' + m.text : m.text;
+        box.appendChild(div);
+      });
+      box.scrollTop = box.scrollHeight; // open at the latest exchange
+    } catch (e) {
+      box.innerHTML = '<div class="history-empty">Could not load messages: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  document.getElementById('btn-history').addEventListener('click', showHistory);
+  document.getElementById('btn-history-back').addEventListener('click', () => showScreen('screen-picker'));
+  document.getElementById('btn-preview-back').addEventListener('click', () => showScreen('screen-history'));
+  document.getElementById('btn-resume').addEventListener('click', () => {
+    if (previewSession) {
+      startClaude({ dir: selectedDir, session: previewSession.id }, document.getElementById('btn-resume'));
     }
   });
 
@@ -699,8 +778,14 @@
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
   });
 
+  // voice.js is optional: if it failed to load, the chat must still work.
+  const voiceBtn = document.getElementById('btn-voice');
+  const voice = window.attachVoice ? window.attachVoice(voiceBtn, chatInput) : null;
+  if (!voice) voiceBtn.hidden = true;
+
   function sendMessage() {
     if (isComposing) return;
+    voice && voice.cancel();
     const text = chatInput.value;
     if (text === '') return;
     // Keep the text in the box if the socket is down, so it is not lost.
@@ -709,6 +794,36 @@
     chatInput.style.height = 'auto';
     setTimeout(() => chatInput.focus(), 50);
   }
+
+  // --- Photos from the phone ---
+  // Uploaded images land in ~/.claude-remote/uploads (Claude is started with
+  // --add-dir on it); their paths go into the message so Claude reads them.
+  const imgInput = document.getElementById('img-input');
+  const btnAttachImg = document.getElementById('btn-attach-img');
+  btnAttachImg.addEventListener('click', () => imgInput.click());
+  imgInput.addEventListener('change', async () => {
+    const files = Array.from(imgInput.files || []);
+    imgInput.value = '';
+    if (!files.length) return;
+    const form = new FormData();
+    files.forEach(f => form.append('files', f));
+    btnAttachImg.textContent = '⏳';
+    btnAttachImg.disabled = true;
+    try {
+      const resp = await fetch('/api/upload', { method: 'POST', body: form });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      const sep = chatInput.value && !chatInput.value.endsWith(' ') ? ' ' : '';
+      chatInput.value += sep + data.paths.join(' ') + ' ';
+      chatInput.dispatchEvent(new Event('input')); // grow the textarea
+      chatInput.focus();
+    } catch (e) {
+      alert('Upload failed: ' + e.message);
+    } finally {
+      btnAttachImg.textContent = '📎';
+      btnAttachImg.disabled = false;
+    }
+  });
 
   // --- Handoff Mode Selector ---
   function showHandoffScreen(dir, mode) {

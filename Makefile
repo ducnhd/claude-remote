@@ -1,4 +1,6 @@
 BINARY=claude-remote
+# ScreenCaptureKit + VideoToolbox helper for the screen video mode.
+SCREENCAP=claude-remote-screencap
 INSTALL_PATH=$(HOME)/bin/$(BINARY)
 PLIST_NAME=com.claude-remote.plist
 PLIST_SRC=launchd/$(PLIST_NAME)
@@ -11,8 +13,11 @@ SIGN_ID=com.claude-remote
 
 .PHONY: build run test test-race clean install uninstall restart logs
 
-build:
+build: $(SCREENCAP)
 	go build -o $(BINARY) .
+
+$(SCREENCAP): screencap/main.swift
+	swiftc -O -swift-version 5 -o $(SCREENCAP) screencap/main.swift
 
 run: build
 	./$(BINARY) serve
@@ -24,13 +29,17 @@ test-race:
 	go test -race ./... -v -count=1
 
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) $(SCREENCAP)
 
 install: build
 	mkdir -p $(HOME)/bin
 	cp $(BINARY) $(INSTALL_PATH)
+	cp $(SCREENCAP) $(HOME)/bin/$(SCREENCAP)
+	@# Screen Recording is granted per signature too: an ad hoc signed helper
+	@# would have it asked again after every build.
 	@if security find-identity -p codesigning | grep -q '"$(SIGN_IDENTITY)"'; then \
 		codesign --force -s "$(SIGN_IDENTITY)" -i $(SIGN_ID) $(INSTALL_PATH) && \
+		codesign --force -s "$(SIGN_IDENTITY)" -i $(SIGN_ID).screencap $(HOME)/bin/$(SCREENCAP) && \
 		echo "Signed with $(SIGN_IDENTITY)"; \
 	else \
 		echo "WARNING: no '$(SIGN_IDENTITY)' signing identity — macOS will re-ask for permissions after every install"; \
@@ -76,5 +85,5 @@ logs:
 uninstall:
 	-launchctl unload $(PLIST_DST)
 	-rm -f $(PLIST_DST)
-	-rm -f $(INSTALL_PATH)
+	-rm -f $(INSTALL_PATH) $(HOME)/bin/$(SCREENCAP)
 	@echo "Uninstalled."

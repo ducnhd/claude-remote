@@ -164,7 +164,9 @@ The 🖥 **Screen** button in the header opens `/screen.html`: a full view of th
 1. On the Mac: **System Settings → General → Sharing → Screen Sharing** → on.
 2. On the phone: tap 🖥 Screen and log in with your macOS username and password (the login runs inside the browser; the server only pipes bytes to `127.0.0.1:5900`).
 
-The key bar has ⌨ (live key-by-key typing), ⤢ Fit, a sticky ⌘ modifier, Esc, Tab, Enter, Backspace and arrows. Screen Sharing drops non-ASCII keystrokes, so for Vietnamese or any accented text use the text bar at the bottom: **Paste** puts the text on the Mac clipboard and presses ⌘V, **Paste ↵** also presses Enter.
+**Video mode** (🎥, the default) streams one display as H.264 over WebRTC, which is far smoother than VNC with large or multiple monitors; Screen Sharing still carries taps and keys, so the macOS login above is still needed. 🖥 switches display, **VNC** switches back to plain Screen Sharing. A locked Mac cannot be captured, and its lock screen over VNC (both displays at full size) is too slow to use, so the page stops fetching pixels and just asks for the Mac password, types it on the lock screen (ASCII only, never stored) and returns to video once unlocked. **Show the lock screen** fetches it over VNC when you need to see it. The first time, macOS asks to allow **claude-remote** under **Privacy & Security → Screen & System Audio Recording**. WebRTC uses host candidates only: the phone must reach the Mac directly (Tailscale or the same Wi-Fi), not just through Cloudflare.
+
+The key bar has ⌨ (live key-by-key typing), ⤢ Fit, a sticky ⌘ modifier, Esc, Tab, Enter, Backspace and arrows. Screen Sharing drops non-ASCII keystrokes, so for Vietnamese or any accented text use the text bar at the bottom: **Paste** puts the text on the Mac clipboard and presses ⌘V, **Enter ↵** pastes it and presses Enter (or just presses Enter when the bar is empty).
 
 ## Tailscale Setup (optional, `"tunnel": {"mode":"off"}`)
 
@@ -212,7 +214,8 @@ Phone (chat UI / screen page)
 cloudflared → 127.0.0.1:8822
 Mac (Go server)
   ├─ pseudo-terminal → Claude Code CLI
-  └─ /ws/vnc → 127.0.0.1:5900 (macOS Screen Sharing)
+  ├─ /ws/vnc → 127.0.0.1:5900 (macOS Screen Sharing)
+  └─ WebRTC (UDP, direct) ← claude-remote-screencap (ScreenCaptureKit → H.264)
 
 Claude Code (MCP client)
   ↕ JSON-RPC over HTTP (:8823, localhost only)

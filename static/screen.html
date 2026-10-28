@@ -2,51 +2,64 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- viewport-fit=cover + safe-area padding: iOS draws a translucent, blurred
+       status bar over the top of the page, which smeared the header. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#16213e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Claude Remote · Screen</title>
   <!-- Self-contained on purpose: the page must lay out even if style.css fails. -->
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; }
+    html { background: #16213e; } /* Safari 26+ tints its top bar from this, not theme-color */
     body { display: flex; flex-direction: column; overflow: hidden; }
     .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .dot.connected { background: #4ade80; }
     .dot.disconnected { background: #f87171; }
-    #screen-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16213e; flex-shrink: 0; }
+    #screen-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16213e; flex-shrink: 0; border-top: 1px solid #262640; }
+    #top-safe { height: env(safe-area-inset-top); background: #16213e; flex-shrink: 0; }
     #screen-bar a, #screen-bar button { padding: 6px 12px; border: 1px solid #444; background: none; color: #eee; border-radius: 4px; font-size: 14px; text-decoration: none; }
     #screen-status { font-size: 12px; color: #888; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #vnc { flex: 1; overflow: hidden; background: #000; position: relative; touch-action: none; }
     #keys { display: flex; gap: 6px; padding: 6px 8px; background: #16213e; overflow-x: auto; flex-shrink: 0; }
     #keys button { flex-shrink: 0; padding: 8px 12px; border: 1px solid #444; background: #1a1a2e; color: #eee; border-radius: 6px; font-size: 14px; }
     #keys button.on { background: #60a5fa; color: #000; border-color: #60a5fa; }
-    #text-bar { display: flex; gap: 6px; padding: 6px 8px 10px; background: #16213e; flex-shrink: 0; }
+    #text-bar { display: flex; gap: 6px; padding: 6px 8px calc(10px + env(safe-area-inset-bottom)); background: #16213e; flex-shrink: 0; }
     #text-input { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 6px; border: 1px solid #444; background: #1a1a2e; color: #eee; font-size: 16px; }
     #text-bar button { flex-shrink: 0; padding: 8px 12px; border-radius: 6px; border: none; background: #60a5fa; color: #000; font-size: 14px; font-weight: 600; }
+    .voice-btn { padding: 8px 8px !important; background: #1a1a2e !important; color: #eee !important; border: 1px solid #444 !important; font-weight: 400 !important; font-size: 13px !important; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    .voice-btn.listening { background: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; animation: voice-pulse 1.2s ease-in-out infinite; }
+    @keyframes voice-pulse { 50% { opacity: .6; } }
     #text-bar button.secondary { background: #1a1a2e; color: #eee; border: 1px solid #444; font-weight: 400; }
+    /* Video mode: the H.264 stream covers the noVNC canvas, which stays
+       underneath only to carry input. */
+    #video-wrap { position: absolute; inset: 0; background: #000; overflow: hidden; z-index: 5; }
+    #video-wrap[hidden] { display: none; }
+    #video { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
     #kbd-input { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
-    #login { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.7); z-index: 10; }
-    #login.show { display: flex; }
-    #login form { background: #16213e; padding: 20px; border-radius: 10px; width: min(320px, 90vw); display: flex; flex-direction: column; gap: 10px; }
-    #login h2 { font-size: 16px; color: #60a5fa; }
-    #login p { font-size: 12px; color: #888; }
-    #login input { padding: 10px; border-radius: 6px; border: 1px solid #444; background: #1a1a2e; color: #eee; font-size: 16px; }
-    #login button { padding: 10px; border-radius: 6px; border: none; background: #60a5fa; color: #000; font-size: 15px; font-weight: 600; }
+    #login, #unlock { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.7); z-index: 10; }
+    #login.show, #unlock.show { display: flex; }
+    #unlock { background: #0b0b16; } /* opaque: nothing stale shows behind it */
+    #unlock button.secondary { background: none; color: #eee; border: 1px solid #444; font-weight: 400; }
+    #login form, #unlock form { background: #16213e; padding: 20px; border-radius: 10px; width: min(320px, 90vw); display: flex; flex-direction: column; gap: 10px; }
+    #login h2, #unlock h2 { font-size: 16px; color: #60a5fa; }
+    #login p, #unlock p { font-size: 12px; color: #888; }
+    #login input, #unlock input { padding: 10px; border-radius: 6px; border: 1px solid #444; background: #1a1a2e; color: #eee; font-size: 16px; }
+    #login button, #unlock button { padding: 10px; border-radius: 6px; border: none; background: #60a5fa; color: #000; font-size: 15px; font-weight: 600; }
   </style>
 </head>
 <body>
-  <div id="screen-bar">
-    <a href="/" title="Back to Claude">←</a>
-    <span id="status-dot" class="dot disconnected"></span>
-    <span id="screen-status">Connecting…</span>
-    <button id="btn-wake" type="button" title="Turn the Mac display on (shows the lock screen)">☀</button>
-    <button id="btn-lock" type="button" title="Lock the Mac">🔒</button>
-    <button id="btn-reconnect" type="button">↻</button>
-  </div>
+  <!-- iOS blurs the top ~90pt of the page, so the controls live at the bottom;
+       the top is only a strip in the bar colour under the status bar. -->
+  <div id="top-safe"></div>
 
   <!-- Touch: tap = click, long press = right click, pinch = zoom,
        one-finger drag = pan when zoomed (drag the mouse when not),
        two-finger drag = scroll. -->
   <div id="vnc">
+    <div id="video-wrap" hidden><video id="video" playsinline autoplay muted></video></div>
     <div id="login">
       <form id="login-form">
         <h2>Mac login</h2>
@@ -56,11 +69,34 @@
         <button type="submit">Connect</button>
       </form>
     </div>
+    <!-- Unlocking blind: the lock screen comes over VNC at full size, which is
+         too slow to watch while typing, but it takes typed keys just fine. -->
+    <div id="unlock">
+      <form id="unlock-form">
+        <h2>🔒 The Mac is locked</h2>
+        <p id="unlock-msg">Enter the Mac password: it is typed on the lock screen, then Enter. It is not stored.</p>
+        <input id="unlock-pass" type="password" autocomplete="current-password" placeholder="Mac password">
+        <button type="submit">Unlock</button>
+        <button type="button" id="unlock-view" class="secondary">Show the lock screen (slow)</button>
+      </form>
+    </div>
   </div>
 
+  <div id="screen-bar">
+    <a href="/" title="Back to Claude">←</a>
+    <span id="status-dot" class="dot disconnected"></span>
+    <span id="screen-status">Connecting…</span>
+    <button id="btn-wake" type="button" title="Turn the Mac display on (shows the lock screen)">☀</button>
+    <button id="btn-unlock" type="button" title="Unlock the Mac: type its password without watching the slow lock screen" hidden>🔓</button>
+    <button id="btn-lock" type="button" title="Lock the Mac">🔒</button>
+    <button id="btn-reconnect" type="button">↻</button>
+  </div>
   <div id="keys">
     <button id="btn-kbd" type="button" title="Type live, key by key">⌨</button>
+    <button id="btn-mode" type="button" title="Smooth video, or plain Screen Sharing (VNC)">VNC</button>
+    <button id="btn-display" type="button" title="Show the other display" hidden>🖥</button>
     <button id="btn-fit" type="button" title="Fit the whole screen">⤢ Fit</button>
+    <button id="btn-refresh" type="button" title="Fetch a fresh picture of what is on screen">⟳</button>
     <button id="btn-cmd" type="button">⌘</button>
     <button type="button" data-keysym="65307">Esc</button>
     <button type="button" data-keysym="65289">Tab ⇥</button>
@@ -75,19 +111,35 @@
        clipboard. A normal input keeps the phone's Vietnamese IME working. -->
   <form id="text-bar">
     <input id="text-input" placeholder="Type text to paste (tiếng Việt OK)" autocomplete="off">
+    <button id="btn-voice" class="voice-btn" type="button" title="Tap to speak, long-press to switch language">🎤</button>
     <button id="btn-paste" type="button" class="secondary">Paste</button>
-    <button type="submit">Paste ↵</button>
+    <button type="submit" title="Paste the text, if any, then press Enter">Enter ↵</button>
   </form>
   <textarea id="kbd-input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>
 
+  <script src="/voice.js"></script>
   <script type="module">
     // noVNC ships CommonJS; jsDelivr's ESM wrapper puts the class one level down.
     import rfbModule from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/lib/rfb.js/+esm';
     const RFB = rfbModule.default || rfbModule;
 
+    // In video mode Screen Sharing only carries input: pixels come from the
+    // H.264 stream, so noVNC must stop asking for framebuffer updates, which
+    // at ~7000 px wide are what made VNC lag. noVNC re-requests after every
+    // update, so one blocked request ends the loop; refreshView restarts it.
+    // The same goes for a locked Mac (lockQuiet): the page asks for the
+    // password itself instead of streaming the lock screen.
+    let videoOn = false;
+    let lockQuiet = false;
+    const fbUpdateRequest = RFB.messages.fbUpdateRequest;
+    RFB.messages.fbUpdateRequest = function (...args) {
+      if (!videoOn && !lockQuiet) return fbUpdateRequest.apply(this, args);
+    };
+
     const XK_SUPER_L = 0xffeb; // noVNC maps the Meta key here; Screen Sharing reads it as ⌘
     const XK_BACKSPACE = 0xff08;
     const XK_RETURN = 0xff0d;
+    const XK_SHIFT_L = 0xffe1;
     const XK_V = 0x0076;
 
     const vncEl = document.getElementById('vnc');
@@ -107,6 +159,7 @@
     try { userEl.value = localStorage.getItem('vnc-user') || ''; } catch (e) {}
 
     function setStatus(text, ok) {
+      statusBase = ok ? text : '';
       statusEl.textContent = text;
       dot.className = 'dot ' + (ok ? 'connected' : 'disconnected');
     }
@@ -124,11 +177,14 @@
       rfb.compressionLevel = 2;
       // noVNC's built-in touch gestures would fight the pinch/pan handler.
       rfb._gestures.detach();
+      rfb._sock._websocket.addEventListener('message', (e) => { rxBytes += e.data.byteLength || 0; lastRx = Date.now(); });
       rfb.addEventListener('connect', () => {
         connected = true;
         login.classList.remove('show');
         setStatus('Connected', true);
         screenCmd('wake'); // never start on a black, sleeping display
+        setTimeout(calibrate, 800); // video may already be playing
+        if (lockQuiet) showUnlock(unlockMsg.textContent);
         // noVNC sizes the framebuffer after this event; fit once it has.
         setTimeout(fit, 300);
       });
@@ -226,12 +282,521 @@
       if (d) d.viewportChangePos(-dxPx / zoom, -dyPx / zoom);
     }
 
-    function fit() { setZoom(0, 0, 0); }
-    function isZoomed() { return zoom > fitScale() * 1.02; }
+    // --- Freshness: is the picture live, or a frozen frame? ---
+    // A static screen and a stalled stream look the same, so the status bar
+    // shows throughput and how long ago pixels last arrived. After any input
+    // with no reply, ask again with a full (non-incremental) request: typing
+    // must always show up, even if an incremental update got lost.
+    let rxBytes = 0;
+    let lastRx = 0;
+    let lastInput = 0;
+    let lastHeal = 0;
+    let statusBase = '';
+    const HEAL_AFTER_MS = 1500;
 
-    document.getElementById('btn-fit').addEventListener('click', fit);
+    function refreshView() {
+      const d = display();
+      if (!connected || !d || !d.width || videoOn || lockQuiet) return;
+      // Always the whole screen: Screen Sharing never answers requests for a
+      // smaller region, which froze the picture when only the viewport was asked for.
+      lastHeal = Date.now();
+      RFB.messages.fbUpdateRequest(rfb._sock, false, 0, 0, d.width, d.height);
+    }
+
+    function noteInput() { lastInput = Date.now(); }
+
+    setInterval(() => {
+      const now = Date.now();
+      if (connected && lastInput > lastRx && now - lastInput > HEAL_AFTER_MS && now - lastHeal > 3000) {
+        refreshView();
+      }
+      if (videoOn) {
+        videoStats().then((v) => { statusEl.textContent = (statusBase || 'Video') + ' · ' + v; });
+      } else if (connected && statusBase) {
+        const idle = lastRx ? Math.floor((now - lastRx) / 1000) : 0;
+        statusEl.textContent = statusBase + ' · ' + Math.round(rxBytes / 1024) + ' KB/s' +
+          (idle >= 3 ? ' · last frame ' + idle + 's ago' : '') + (lockPoll ? ' · locked' : '');
+      }
+      rxBytes = 0;
+    }, 1000);
+
+    document.getElementById('btn-refresh').addEventListener('click', () => {
+      if (videoOn || videoPc) { stopVideo(); startVideo(); } else refreshView();
+    });
+
+    function fit() { setZoom(0, 0, 0); }
+
+    // The gestures below drive whichever picture is showing through one
+    // interface; points are client (page) coordinates.
+    const vncView = {
+      zoom: () => zoom,
+      isZoomed: () => zoom > fitScale() * 1.02,
+      fit,
+      setZoom(z, cx, cy) { const p = canvasPos({ clientX: cx, clientY: cy }); setZoom(z, p.x, p.y); },
+      panBy,
+      pointer(cx, cy, mask) { const p = canvasPos({ clientX: cx, clientY: cy }); rfb._sendMouse(p.x, p.y, mask); },
+    };
+
+    // Video zoom is a CSS transform: video pixel (vx, vy) is drawn at
+    // (tx + vx*scale, ty + vy*scale) inside the box.
+    const video = document.getElementById('video');
+    const videoWrap = document.getElementById('video-wrap');
+    let vScale = 1, vTx = 0, vTy = 0;
+    let geometry = null; // from the offer answer: the display's place in the desktop
+
+    function vFit() {
+      const box = boxSize();
+      return video.videoWidth ? Math.min(box.w / video.videoWidth, box.h / video.videoHeight) : 1;
+    }
+    function applyVideo() {
+      const box = boxSize();
+      const w = video.videoWidth * vScale, h = video.videoHeight * vScale;
+      // Centre what is smaller than the box; never pan past the edges.
+      vTx = w <= box.w ? (box.w - w) / 2 : Math.min(0, Math.max(box.w - w, vTx));
+      vTy = h <= box.h ? (box.h - h) / 2 : Math.min(0, Math.max(box.h - h, vTy));
+      video.style.width = video.videoWidth + 'px';
+      video.style.height = video.videoHeight + 'px';
+      video.style.transform = `translate(${vTx}px, ${vTy}px) scale(${vScale})`;
+    }
+    // How framebuffer pixels map to the displays is Screen Sharing's
+    // business and not documented: with a Retina (3024×1964) and a 4K
+    // (3840×2160) it sends 6864×2160, side by side and bottom-aligned, not the
+    // arrangement in System Settings. So the page measures it: it moves the
+    // pointer to two framebuffer points per display and reads where macOS put
+    // it (/api/screen/state → cursor, in global points). That gives, per
+    // display, global = a·fb + b on each axis. Measured maps are kept per
+    // display layout, so a new or unplugged monitor is measured again.
+    let calib = null;
+    let calibrating = false;
+    let buttonsDown = false;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // Until measured: side by side, native pixels, bottom-aligned.
+    function guessRect(id) {
+      const ds = [...geometry.displays].sort((a, b) => a.frame.x - b.frame.x || a.frame.y - b.frame.y);
+      let x = 0, h = 0, rect = null;
+      for (const g of ds) {
+        const pw = g.pixelWidth, ph = pw * g.frame.h / g.frame.w;
+        if (g.id === id) rect = { x, w: pw, h: ph };
+        x += pw;
+        h = Math.max(h, ph);
+      }
+      rect.y = h - rect.h;
+      const d = display(), sx = d.width / x, sy = d.height / h;
+      return { x: rect.x * sx, y: rect.y * sy, w: rect.w * sx, h: rect.h * sy };
+    }
+
+    function layoutSig() {
+      const d = display();
+      return d.width + 'x' + d.height + '|' + geometry.displays
+        .map((g) => [g.id, g.pixelWidth, g.frame.x, g.frame.y, g.frame.w, g.frame.h].join(',')).join(';');
+    }
+
+    async function cursorNow() {
+      const res = await fetch('/api/screen/state');
+      if (!res.ok) throw new Error(res.status);
+      const c = (await res.json()).cursor;
+      if (!c) throw new Error('no cursor');
+      return c;
+    }
+
+    async function calibrate() {
+      const d = display();
+      if (calibrating || buttonsDown || !videoOn || !connected || !geometry || !d || !d.width) return;
+      const sig = layoutSig();
+      if (calib && calib.sig === sig) return;
+      try {
+        const saved = JSON.parse(localStorage.getItem('fb-calib') || 'null');
+        if (saved && saved.sig === sig) { calib = saved; return; }
+      } catch (e) {}
+      calibrating = true;
+      try {
+        const start = await cursorNow();
+        const samples = [];
+        for (const g of geometry.displays) {
+          const r = guessRect(g.id);
+          // Well inside the display: away from hot corners and the Dock.
+          for (const t of [0.3, 0.7]) {
+            const fx = Math.round(r.x + r.w * t), fy = Math.round(r.y + r.h * t);
+            RFB.messages.pointerEvent(rfb._sock, fx, fy, 0);
+            await sleep(150);
+            const c = await cursorNow();
+            samples.push({ fx, fy, gx: c.x, gy: c.y });
+          }
+        }
+        const maps = {};
+        for (const g of geometry.displays) {
+          const f = g.frame;
+          const hit = samples.filter((p) => p.gx >= f.x && p.gx < f.x + f.w && p.gy >= f.y && p.gy < f.y + f.h);
+          if (hit.length < 2) continue;
+          const [p, q] = hit;
+          if (Math.abs(q.fx - p.fx) < 50 || Math.abs(q.fy - p.fy) < 50) continue;
+          const ax = (q.gx - p.gx) / (q.fx - p.fx), ay = (q.gy - p.gy) / (q.fy - p.fy);
+          if (!(ax > 0 && ay > 0)) continue;
+          maps[g.id] = { ax, bx: p.gx - ax * p.fx, ay, by: p.gy - ay * p.fy };
+        }
+        calib = { sig, maps };
+        const all = geometry.displays.every((g) => maps[g.id]);
+        if (all) { try { localStorage.setItem('fb-calib', JSON.stringify(calib)); } catch (e) {} }
+        // Put the pointer back where it was.
+        const back = globalToFb(start.x, start.y);
+        if (back) RFB.messages.pointerEvent(rfb._sock, back.x, back.y, 0);
+        if (!all) console.warn('screen: could not measure every display', samples);
+      } catch (e) {
+        console.warn('screen: tap calibration failed', e);
+      } finally {
+        calibrating = false;
+      }
+    }
+
+    function displayAt(gx, gy) {
+      return geometry.displays.find((g) => gx >= g.frame.x && gx < g.frame.x + g.frame.w && gy >= g.frame.y && gy < g.frame.y + g.frame.h);
+    }
+
+    // A point in global display points → framebuffer pixels.
+    function globalToFb(gx, gy) {
+      const g = displayAt(gx, gy), d = display();
+      if (!g || !d || !d.width) return null;
+      const clamp = (v, max) => Math.max(0, Math.min(max - 1, Math.round(v)));
+      const m = calib && calib.sig === layoutSig() && calib.maps[g.id];
+      if (m) return { x: clamp((gx - m.bx) / m.ax, d.width), y: clamp((gy - m.by) / m.ay, d.height) };
+      const f = g.frame, r = guessRect(g.id);
+      return { x: clamp(r.x + (gx - f.x) / f.w * r.w, d.width), y: clamp(r.y + (gy - f.y) / f.h * r.h, d.height) };
+    }
+
+    // Client point → video pixel → global point on the streamed display → framebuffer.
+    function videoToFb(cx, cy) {
+      const r = vncEl.getBoundingClientRect();
+      const vx = (cx - r.left - vTx) / vScale, vy = (cy - r.top - vTy) / vScale;
+      const f = geometry.display.frame;
+      // Clamp inside the display so taps on the letterbox stay on it.
+      const gx = f.x + Math.max(0, Math.min(0.9999, vx / video.videoWidth)) * f.w;
+      const gy = f.y + Math.max(0, Math.min(0.9999, vy / video.videoHeight)) * f.h;
+      return globalToFb(gx, gy);
+    }
+    const videoView = {
+      zoom: () => vScale,
+      isZoomed: () => vScale > vFit() * 1.02,
+      fit() { vScale = vFit(); applyVideo(); },
+      setZoom(z, cx, cy) {
+        const r = vncEl.getBoundingClientRect();
+        const ex = cx - r.left, ey = cy - r.top;
+        z = Math.max(vFit(), Math.min(MAX_ZOOM, z));
+        const px = (ex - vTx) / vScale, py = (ey - vTy) / vScale; // keep this pixel under the finger
+        vScale = z; vTx = ex - px * z; vTy = ey - py * z;
+        applyVideo();
+      },
+      panBy(dx, dy) { vTx += dx; vTy += dy; applyVideo(); },
+      pointer(cx, cy, mask) {
+        const d = display();
+        if (!geometry || !d || !d.width || !video.videoWidth) return;
+        // Probes own the pointer for a moment; a release still goes through
+        // so no button is left held down on the Mac.
+        if (calibrating && mask) return;
+        buttonsDown = mask !== 0;
+        // A monitor plugged in or out since: measure again once the finger is up.
+        if (!buttonsDown && (!calib || calib.sig !== layoutSig())) setTimeout(calibrate, 300);
+        const p = videoToFb(cx, cy);
+        if (p) RFB.messages.pointerEvent(rfb._sock, p.x, p.y, mask);
+      },
+    };
+    function view() { return videoOn ? videoView : vncView; }
+
+    document.getElementById('btn-fit').addEventListener('click', () => view().fit());
     // noVNC resets scale and viewport on resize; put ours back afterwards.
-    window.addEventListener('resize', () => setTimeout(() => setZoom(zoom, 0, 0), 250));
+    window.addEventListener('resize', () => setTimeout(() => {
+      setZoom(zoom, 0, 0);
+      if (videoOn) videoView.fit();
+    }, 250));
+
+    // --- Video mode ---
+    // claude-remote captures one display with ScreenCaptureKit and streams
+    // H.264 over WebRTC; noVNC stays connected for mouse and keys. The Mac's
+    // lock screen cannot be captured, so a locked Mac falls back to VNC until
+    // it is unlocked.
+    const modeBtn = document.getElementById('btn-mode');
+    const displayBtn = document.getElementById('btn-display');
+    let videoPc = null;
+    let lockPoll = null;
+    let retryTimer = null;
+    let prevStats = null;
+    function pref(key, def) { try { return localStorage.getItem(key) || def; } catch (e) { return def; } }
+    function savePref(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
+    let mode = pref('screen-mode', 'video');
+    let videoDisplay = pref('screen-display', 'builtin');
+
+    function showMode() {
+      modeBtn.textContent = mode !== 'video' ? 'VNC' : videoOn ? '🎥 Video' : lockPoll ? '🔒 VNC' : '🎥 …';
+      modeBtn.classList.toggle('on', mode === 'video');
+      displayBtn.hidden = !(videoOn && geometry && geometry.displays && geometry.displays.length > 1);
+    }
+
+    function waitGathering(pc, ms) {
+      if (pc.iceGatheringState === 'complete') return Promise.resolve();
+      return new Promise((resolve) => {
+        const t = setTimeout(resolve, ms);
+        pc.addEventListener('icegatheringstatechange', () => {
+          if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+        });
+      });
+    }
+
+    async function startVideo() {
+      if (mode !== 'video' || videoPc || lockPoll || document.hidden) return;
+      clearTimeout(retryTimer);
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      videoPc = pc;
+      showMode();
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      const events = pc.createDataChannel('events');
+      events.onmessage = (e) => { try { onVideoEvent(JSON.parse(e.data)); } catch (err) {} };
+      // The server hangs up when capture ends; this notices in milliseconds.
+      events.onclose = () => { if (pc === videoPc) videoFailed('video stopped'); };
+      pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); video.play().catch(() => {}); };
+      pc.onconnectionstatechange = () => {
+        if (pc !== videoPc) return;
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') videoFailed('video connection lost');
+        // Browsers take ~30 s to call a dead link "failed"; VNC is better
+        // than a frozen picture long before that.
+        if (pc.connectionState === 'disconnected') {
+          setTimeout(() => { if (pc === videoPc && pc.connectionState === 'disconnected') videoFailed('video connection lost'); }, 4000);
+        }
+      };
+      try {
+        await pc.setLocalDescription(await pc.createOffer());
+        // The server answers in one go, so send the offer with its candidates.
+        await waitGathering(pc, 1500);
+        const res = await fetch('/api/screen/offer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sdp: pc.localDescription.sdp, display: videoDisplay }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (pc !== videoPc) return;
+        if (res.status === 409 || body.locked) { lockedFallback(); return; }
+        if (!res.ok) throw new Error(body.error || res.status);
+        geometry = body.geometry;
+        await pc.setRemoteDescription({ type: 'answer', sdp: body.sdp });
+      } catch (e) {
+        // No retry: a missing permission or helper will not fix itself, and
+        // each attempt would ask macOS for Screen Recording again. ⟳ retries.
+        if (pc === videoPc) videoFailed('video unavailable: ' + e.message, false);
+      }
+    }
+
+    // Switch over only once frames are actually playing, so the picture
+    // never goes black while WebRTC connects.
+    function onVideoPlaying() {
+      if (!videoPc || videoOn) return;
+      videoOn = true;
+      videoWrap.hidden = false;
+      videoView.fit();
+      prevStats = null;
+      showMode();
+      calibrate();
+    }
+    video.addEventListener('playing', onVideoPlaying);
+    video.addEventListener('resize', () => { if (videoOn) videoView.fit(); });
+
+    function stopVideo() {
+      clearTimeout(retryTimer);
+      if (videoPc) {
+        videoPc.close();
+        videoPc = null;
+        fetch('/api/screen/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+      }
+      video.srcObject = null;
+      if (videoOn) {
+        videoOn = false;
+        videoWrap.hidden = true;
+        refreshView(); // restart noVNC's update loop
+        setTimeout(fit, 300);
+      }
+      showMode();
+    }
+
+    function videoFailed(why, retry = true) {
+      stopVideo();
+      if (connected) setStatus('Connected (VNC) — ' + why, true);
+      else statusEl.textContent = why;
+      // Transient drops (Wi-Fi hand-over, phone asleep) heal by themselves.
+      if (mode === 'video' && retry) retryTimer = setTimeout(startVideo, 5000);
+    }
+
+    function onVideoEvent(ev) {
+      if (ev.event === 'locked' && ev.locked) lockedFallback();
+      else if (ev.event === 'error') ev.locked ? lockedFallback() : videoFailed(ev.message || 'capture stopped');
+    }
+
+    // ScreenCaptureKit shows nothing of the lock screen, and the lock screen
+    // over VNC is the whole two-display framebuffer: too slow to use. So the
+    // page asks for the password and types it blind; the lock screen itself
+    // is only fetched on request. Video comes back once the Mac is unlocked.
+    function lockedFallback() {
+      lockQuiet = true; // before stopVideo, so it does not restart VNC pixels
+      stopVideo();
+      if (lockPoll) return;
+      if (connected) setStatus('Connected — Mac is locked', true);
+      else statusEl.textContent = 'Mac is locked — log in to Screen Sharing to unlock it';
+      showUnlock('Enter the Mac password: it is typed on the lock screen, then Enter. It is not stored.');
+      lockPoll = setInterval(async () => {
+        try {
+          const res = await fetch('/api/screen/state');
+          if (!res.ok) return;
+          if (!(await res.json()).locked) {
+            clearInterval(lockPoll);
+            lockPoll = null;
+            unlockBtn.hidden = true;
+            unlockEl.classList.remove('show');
+            clearTimeout(unlockCheck);
+            if (rfb) { rfb.qualityLevel = 6; rfb.compressionLevel = 2; }
+            lockQuiet = false;
+            if (connected) setStatus('Connected', true);
+            if (mode === 'video') startVideo(); else refreshView();
+          }
+        } catch (e) {}
+      }, 1000);
+      unlockBtn.hidden = false;
+      showMode();
+    }
+
+    const unlockBtn = document.getElementById('btn-unlock');
+    const unlockEl = document.getElementById('unlock');
+    const unlockPass = document.getElementById('unlock-pass');
+    const unlockMsg = document.getElementById('unlock-msg');
+    let unlockCheck = null;
+    const WAKE_SETTLE_MS = 2500;
+    let lastWake = 0;
+    // Wake the display and the lock screen's UI (a Shift press through Screen
+    // Sharing), at most every few seconds. /api/screen/wake is not awaited:
+    // it may answer only after caffeinate's 2 s.
+    function preWake() {
+      if (Date.now() - lastWake < 4000) return;
+      lastWake = Date.now();
+      screenCmd('wake');
+      if (connected) rfb.sendKey(XK_SHIFT_L);
+    }
+    unlockPass.addEventListener('focus', preWake);
+    unlockPass.addEventListener('input', preWake);
+    // Typing needs Screen Sharing; until its login is done that form shows.
+    function showUnlock(msg) {
+      if (!lockPoll && !lockQuiet) return;
+      unlockMsg.textContent = msg;
+      if (!connected) return;
+      unlockEl.classList.add('show');
+      unlockPass.focus();
+      preWake(); // the lock screen gets ready while the password is typed
+    }
+    unlockBtn.addEventListener('click', () => {
+      if (!connected) { statusEl.textContent = 'Log in to Screen Sharing first (↻)'; return; }
+      showUnlock(unlockMsg.textContent);
+    });
+    // Escape hatch: watch the real lock screen (another user, an update
+    // prompt…) at VNC speed, with cheaper pictures to soften the lag.
+    document.getElementById('unlock-view').addEventListener('click', () => {
+      unlockPass.value = '';
+      unlockEl.classList.remove('show');
+      lockQuiet = false;
+      if (rfb) { rfb.qualityLevel = 2; rfb.compressionLevel = 6; }
+      refreshView();
+      setTimeout(fit, 300);
+    });
+    document.getElementById('unlock-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pw = unlockPass.value;
+      unlockPass.value = '';
+      unlockEl.classList.remove('show');
+      // Screen Sharing only delivers ASCII keys; anything else never arrives.
+      if (!pw || [...pw].some((ch) => ch.codePointAt(0) < 0x20 || ch.codePointAt(0) > 0x7e)) {
+        statusEl.textContent = 'Password must be plain ASCII to type it remotely';
+        return;
+      }
+      statusEl.textContent = 'Unlocking…';
+      // Still locked a while later: most likely a wrong password.
+      clearTimeout(unlockCheck);
+      unlockCheck = setTimeout(() => showUnlock('Still locked — wrong password? Try again.'), 7000);
+      // Keys reaching a lock screen that only just appeared are lost (seen:
+      // typed 0.2 s after waking → wrong password; 17 s after → fine). The
+      // form woke the Mac when it opened, so normally that time has passed
+      // while the password was being typed on the phone; else wait it out.
+      preWake();
+      const t0 = Date.now();
+      let wasAsleep = false;
+      while (Date.now() - t0 < 6000) {
+        try {
+          const st = await (await fetch('/api/screen/state')).json();
+          if (!st.asleep) break;
+          wasAsleep = true;
+        } catch (err) { break; }
+        await sleep(150);
+      }
+      // A display that just woke still fades the lock screen in.
+      await sleep(Math.max(wasAsleep ? 600 : 150, WAKE_SETTLE_MS - (Date.now() - lastWake)));
+      for (const ch of pw) {
+        rfb.sendKey(ch.codePointAt(0));
+        await sleep(25);
+      }
+      rfb.sendKey(XK_RETURN);
+      noteInput();
+    });
+
+    modeBtn.addEventListener('click', () => {
+      mode = mode === 'video' ? 'vnc' : 'video';
+      savePref('screen-mode', mode);
+      if (mode === 'video') startVideo();
+      else {
+        // Plain VNC shows whatever is on screen, the lock screen included.
+        clearInterval(lockPoll); lockPoll = null;
+        lockQuiet = false;
+        unlockEl.classList.remove('show');
+        unlockBtn.hidden = true;
+        stopVideo();
+        refreshView();
+      }
+      showMode();
+    });
+
+    // Cycle through the displays: the stream carries one at a time.
+    displayBtn.addEventListener('click', () => {
+      const ds = (geometry && geometry.displays) || [];
+      const i = ds.findIndex((d) => d.id === geometry.display.id);
+      const next = ds[(i + 1) % ds.length];
+      videoDisplay = next.builtin ? 'builtin' : String(next.id);
+      savePref('screen-display', videoDisplay);
+      stopVideo();
+      startVideo();
+    });
+
+    // The phone locking or switching apps must not keep the Mac capturing.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stopVideo();
+      else startVideo();
+    });
+
+    // fps, bitrate and an estimate of the delay the phone adds (network,
+    // jitter buffer, decode); capture and encode add roughly one frame.
+    async function videoStats() {
+      if (!videoPc) return '';
+      const st = await videoPc.getStats();
+      let inb = null, rtt = null;
+      st.forEach((r) => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video') inb = r;
+        if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
+      });
+      if (!inb) return 'connecting…';
+      const p = prevStats;
+      prevStats = { t: inb.timestamp, bytes: inb.bytesReceived, jb: inb.jitterBufferDelay, jbn: inb.jitterBufferEmittedCount,
+                    dec: inb.totalDecodeTime, decn: inb.framesDecoded, frames: inb.framesDecoded };
+      if (!p) return 'starting…';
+      const dt = (inb.timestamp - p.t) / 1000 || 1;
+      const fps = (inb.framesDecoded - p.frames) / dt;
+      const mbps = (inb.bytesReceived - p.bytes) * 8 / dt / 1e6;
+      const jb = inb.jitterBufferEmittedCount > p.jbn ? (inb.jitterBufferDelay - p.jb) / (inb.jitterBufferEmittedCount - p.jbn) : 0;
+      const dec = inb.framesDecoded > p.decn ? (inb.totalDecodeTime - p.dec) / (inb.framesDecoded - p.decn) : 0;
+      const delay = ((rtt || 0) / 2 + jb + dec) * 1000;
+      return Math.round(fps) + ' fps · ' + mbps.toFixed(1) + ' Mbps · RTT ' + Math.round((rtt || 0) * 1000) +
+        ' ms · ~' + Math.round(delay) + ' ms';
+    }
 
     // --- Touch input ---
     const TAP_MOVE = 10;       // px a finger may drift and still count as a tap
@@ -247,26 +812,28 @@
     }
     function mid(a, b) { return { clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2 }; }
     function dist(a, b) { return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
-    function mouse(p, mask) { if (connected) rfb._sendMouse(p.x, p.y, mask); }
-    function click(p, button) { mouse(p, button); mouse(p, 0); }
+    // t is anything with clientX/clientY: a Touch, or a two-finger midpoint.
+    function mouse(t, mask) { if (connected) { view().pointer(t.clientX, t.clientY, mask); noteInput(); } }
+    function click(t, button) { mouse(t, button); mouse(t, 0); }
 
     vncEl.addEventListener('touchstart', (e) => {
-      if (!connected || login.classList.contains('show')) return;
+      // Overlays sit inside #vnc: their fields must still get the tap.
+      if (!connected || login.classList.contains('show') || document.getElementById('unlock').classList.contains('show')) return;
       e.preventDefault();
       const ts = e.touches;
       if (ts.length === 1) {
         const t = ts[0];
         g = { mode: 'pending', start: t, last: t };
         g.timer = setTimeout(() => {
-          if (g && g.mode === 'pending') { click(canvasPos(t), BTN_RIGHT); g.mode = 'done'; }
+          if (g && g.mode === 'pending') { click(t, BTN_RIGHT); g.mode = 'done'; }
         }, LONG_PRESS_MS);
       } else if (ts.length === 2) {
         if (g) {
           clearTimeout(g.timer);
-          if (g.mode === 'drag') mouse(canvasPos(g.last), 0);
+          if (g.mode === 'drag') mouse(g.last, 0);
         }
         const m = mid(ts[0], ts[1]);
-        g = { mode: 'two', dist0: dist(ts[0], ts[1]), zoom0: zoom, mid0: m, last: m, acc: 0 };
+        g = { mode: 'two', dist0: dist(ts[0], ts[1]), zoom0: view().zoom(), mid0: m, last: m, acc: 0 };
       }
     }, { passive: false });
 
@@ -279,11 +846,11 @@
         if (g.mode === 'pending' && Math.hypot(t.clientX - g.start.clientX, t.clientY - g.start.clientY) > TAP_MOVE) {
           clearTimeout(g.timer);
           // Zoomed in, a drag moves the view; at fit it drags the mouse.
-          g.mode = isZoomed() ? 'pan' : 'drag';
-          if (g.mode === 'drag') mouse(canvasPos(g.start), BTN_LEFT);
+          g.mode = view().isZoomed() ? 'pan' : 'drag';
+          if (g.mode === 'drag') mouse(g.start, BTN_LEFT);
         }
-        if (g.mode === 'pan') panBy(t.clientX - g.last.clientX, t.clientY - g.last.clientY);
-        if (g.mode === 'drag') mouse(canvasPos(t), BTN_LEFT);
+        if (g.mode === 'pan') view().panBy(t.clientX - g.last.clientX, t.clientY - g.last.clientY);
+        if (g.mode === 'drag') mouse(t, BTN_LEFT);
         g.last = t;
       } else if (ts.length === 2 && (g.mode === 'two' || g.mode === 'pinch' || g.mode === 'scroll')) {
         const m = mid(ts[0], ts[1]);
@@ -294,15 +861,13 @@
           else if (Math.hypot(m.clientX - g.mid0.clientX, m.clientY - g.mid0.clientY) > TAP_MOVE) g.mode = 'scroll';
         }
         if (g.mode === 'pinch') {
-          const p = canvasPos(m);
-          setZoom(g.zoom0 * d / g.dist0, p.x, p.y);
-          panBy(m.clientX - g.last.clientX, m.clientY - g.last.clientY);
+          view().setZoom(g.zoom0 * d / g.dist0, m.clientX, m.clientY);
+          view().panBy(m.clientX - g.last.clientX, m.clientY - g.last.clientY);
         } else if (g.mode === 'scroll') {
           g.acc += m.clientY - g.last.clientY;
-          const p = canvasPos(m);
           while (Math.abs(g.acc) >= SCROLL_STEP) {
             // Natural scrolling: fingers moving down reveal content above.
-            click(p, g.acc > 0 ? WHEEL_UP : WHEEL_DOWN);
+            click(m, g.acc > 0 ? WHEEL_UP : WHEEL_DOWN);
             g.acc -= Math.sign(g.acc) * SCROLL_STEP;
           }
         }
@@ -315,8 +880,8 @@
       e.preventDefault();
       if (e.touches.length > 0) return; // wait until every finger is up
       clearTimeout(g.timer);
-      if (g.mode === 'pending') click(canvasPos(g.start), BTN_LEFT);
-      if (g.mode === 'drag') mouse(canvasPos(g.last), 0);
+      if (g.mode === 'pending') click(g.start, BTN_LEFT);
+      if (g.mode === 'drag') mouse(g.last, 0);
       g = null;
     }
     vncEl.addEventListener('touchend', endTouch, { passive: false });
@@ -331,6 +896,7 @@
     // Send one key, wrapped in ⌘ when the sticky Command button is on.
     function press(keysym) {
       if (!rfb || !connected) return;
+      noteInput();
       if (cmdOn) rfb.sendKey(XK_SUPER_L, 'MetaLeft', true);
       rfb.sendKey(keysym);
       if (cmdOn) {
@@ -354,11 +920,18 @@
         rfb.sendKey(XK_SUPER_L, 'MetaLeft', true);
         rfb.sendKey(XK_V, 'KeyV');
         rfb.sendKey(XK_SUPER_L, 'MetaLeft', false);
+        noteInput();
       }).catch(() => setStatus('Paste failed', false));
       return pasteQueue;
     }
 
+    // voice.js is optional: if it failed to load, the screen must still work.
+    const voiceBtn = document.getElementById('btn-voice');
+    const voice = window.attachVoice ? window.attachVoice(voiceBtn, textInput) : null;
+    if (!voice) voiceBtn.hidden = true;
+
     async function sendTextBar(withEnter) {
+      voice && voice.cancel();
       const text = textInput.value;
       if (!text) { if (withEnter) press(XK_RETURN); return; }
       textInput.value = '';
@@ -421,6 +994,8 @@
     });
 
     connect();
+    showMode();
+    startVideo();
   </script>
 </body>
 </html>

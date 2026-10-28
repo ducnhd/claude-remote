@@ -125,6 +125,11 @@ func (tm *TerminalManager) StartWithResume(dir string) error {
 	return tm.start(dir, args)
 }
 
+func (tm *TerminalManager) StartWithSession(dir, id string) error {
+	args := append(append([]string{}, tm.args...), "--resume", id)
+	return tm.start(dir, args)
+}
+
 func (tm *TerminalManager) start(dir string, args []string) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()

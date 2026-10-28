@@ -2,7 +2,12 @@
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- viewport-fit=cover + safe-area padding: iOS draws a translucent, blurred
+       status bar over the top of the page, which smeared the header. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#16213e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Claude Remote</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
@@ -31,8 +36,30 @@
     <div id="dir-list"></div>
     <div id="start-bar" class="hidden">
       <div id="selected-dir"></div>
-      <button id="btn-start">Start Claude</button>
+      <div id="start-actions">
+        <button id="btn-history" type="button">🕘 History</button>
+        <button id="btn-start">Start Claude</button>
+      </div>
     </div>
+  </div>
+
+  <!-- Past sessions of the selected folder -->
+  <div id="screen-history" class="screen">
+    <div class="sub-toolbar">
+      <button id="btn-history-back" class="tool-btn" type="button">←</button>
+      <span id="history-dir" class="sub-title"></span>
+    </div>
+    <div id="history-list"></div>
+  </div>
+
+  <!-- Read-only preview of one session, with Resume -->
+  <div id="screen-preview" class="screen">
+    <div class="sub-toolbar">
+      <button id="btn-preview-back" class="tool-btn" type="button">←</button>
+      <span id="preview-title" class="sub-title"></span>
+      <button id="btn-resume" type="button">▶ Resume</button>
+    </div>
+    <div id="preview-messages"></div>
   </div>
 
   <!-- Screen 3: Handoff Mode Selector (NEW) -->
@@ -83,6 +110,9 @@
       <button class="action-btn" data-key="\x03">Ctrl+C</button>
     </div>
     <div id="input-bar">
+      <button id="btn-attach-img" title="Send a photo">📎</button>
+      <button id="btn-voice" class="voice-btn" type="button" title="Tap to speak, long-press to switch language">🎤</button>
+      <input id="img-input" type="file" accept="image/*" multiple hidden>
       <textarea id="chat-input" placeholder="Type a message..." rows="1"></textarea>
       <button id="btn-send">Send</button>
       <button id="btn-hide-kb" title="Hide keyboard">⌨↓</button>
@@ -91,6 +121,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="/voice.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

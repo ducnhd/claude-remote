@@ -27,6 +27,7 @@ type Server struct {
 	terminal *TerminalManager
 	files    *FileBrowser
 	tunnel   *TunnelManager
+	video    *VideoManager
 	mux      *http.ServeMux
 	useTLS   bool
 	// authLimiter throttles token guessing on the public endpoints.
@@ -39,12 +40,16 @@ type Server struct {
 var claudeArgs = []string{"--settings", `{"tui":"default"}`}
 
 func NewServer(cfg *Config, auth *Auth) *Server {
+	// Claude refuses to start if an --add-dir target is missing.
+	os.MkdirAll(uploadsDir(cfg), 0o700)
 	return &Server{
-		config:      cfg,
-		auth:        auth,
-		terminal:    NewTerminalManager(cfg.ClaudePath, claudeArgs),
+		config: cfg,
+		auth:   auth,
+		// --add-dir lets Claude read photos sent from the phone without asking.
+		terminal:    NewTerminalManager(cfg.ClaudePath, append(append([]string{}, claudeArgs...), "--add-dir", uploadsDir(cfg))),
 		files:       NewFileBrowser(cfg.AllowedDirs),
 		tunnel:      NewTunnelManager(cfg.Tunnel, cfg.Port),
+		video:       NewVideoManager(),
 		mux:         http.NewServeMux(),
 		authLimiter: newLimiter(10, 6*time.Second), // 10 burst, ~10/min sustained
 	}
@@ -75,8 +80,14 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/ws/term", s.protect(s.terminal.WebSocketHandler()))
 	s.mux.Handle("/ws/vnc", s.protect(s.handleVNC))
 	s.mux.Handle("/api/clipboard", s.protect(s.handleClipboard))
+	s.mux.Handle("/api/upload", s.protect(s.handleUpload))
+	s.mux.Handle("/api/sessions", s.protect(s.handleSessions))
+	s.mux.Handle("/api/sessions/messages", s.protect(s.handleSessionMessages))
 	s.mux.Handle("/api/screen/wake", s.protect(s.handleWake))
 	s.mux.Handle("/api/screen/lock", s.protect(s.handleLock))
+	s.mux.Handle("/api/screen/offer", s.protect(s.handleScreenOffer))
+	s.mux.Handle("/api/screen/stop", s.protect(s.handleScreenStop))
+	s.mux.Handle("/api/screen/state", s.protect(s.handleScreenState))
 	s.mux.Handle("/api/claude/start", s.protect(s.handleClaudeStart))
 	s.mux.Handle("/api/claude/status", s.protect(s.handleClaudeStatus))
 	s.mux.Handle("/api/files", s.protect(s.files.HandleList))
@@ -218,34 +229,31 @@ func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Dir    string `json:"dir"`
-		Resume bool   `json:"resume"`
+		Dir     string `json:"dir"`
+		Resume  bool   `json:"resume"`
+		Session string `json:"session"` // resume this exact session
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	// Validate directory: must exist, be a real directory, and live inside
-	// one of the allowed roots (component-wise, not a raw prefix match).
-	resolved, err := filepath.EvalSymlinks(expandHome(req.Dir))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid directory")
+	resolved, status, msg := s.resolveProjectDir(req.Dir)
+	if status != 0 {
+		writeJSONError(w, status, msg)
 		return
 	}
-	if info, statErr := os.Stat(resolved); statErr != nil || !info.IsDir() {
-		writeJSONError(w, http.StatusBadRequest, "not a directory")
-		return
-	}
-	if !withinAllowed(resolved, s.config.AllowedDirs) {
-		writeJSONError(w, http.StatusForbidden, "directory not allowed")
+	if req.Session != "" && !sessionIDRe.MatchString(req.Session) {
+		writeJSONError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
 	// Stop existing session if running
 	s.terminal.Stop()
 	// Start new session in the requested directory
-	log.Printf("Starting claude: dir=%s resume=%v cmd=%s", resolved, req.Resume, s.config.ClaudePath)
+	log.Printf("Starting claude: dir=%s resume=%v session=%s cmd=%s", resolved, req.Resume, req.Session, s.config.ClaudePath)
 	var startErr error
-	if req.Resume {
+	if req.Session != "" {
+		startErr = s.terminal.StartWithSession(resolved, req.Session)
+	} else if req.Resume {
 		startErr = s.terminal.StartWithResume(resolved)
 	} else {
 		startErr = s.terminal.StartInDir(resolved)

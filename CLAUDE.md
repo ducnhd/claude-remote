@@ -69,6 +69,10 @@ Go binary (single process, two listeners when TLS active)
 │                  #   pipe stdin/stdout via startIO(), ring buffer, multi-client broadcast
 ├── vnc.go         # /ws/vnc: byte pipe from noVNC to macOS Screen Sharing (127.0.0.1:5900),
 │                  #   /api/clipboard: pbcopy so non-ASCII text can be pasted with ⌘V
+├── video.go       # Screen video mode: runs claude-remote-screencap, relays its H.264 over
+│                  #   WebRTC (pion, host candidates only), /api/screen/offer|stop|state
+├── screencap/     # main.swift → claude-remote-screencap: ScreenCaptureKit + VideoToolbox
+│                  #   H.264 (Constrained Baseline, real-time, keyframe ≤2s), geometry/lock events
 ├── files.go       # File browser API (read-only, allowlist, ~ expansion)
 ├── config.go      # Config loading/saving (~/.claude-remote/)
 ├── static/        # Web UI (vanilla HTML/JS/CSS, no build step)
@@ -76,7 +80,8 @@ Go binary (single process, two listeners when TLS active)
 │   ├── app.js     # WebSocket, hidden xterm.js, cell-by-cell rendering, 80ms debounce,
 │   │              #   Vietnamese IME, handoff URL params, mode selector, auth error handling
 │   ├── screen.html# Self-contained Mac screen viewer/controller (noVNC from CDN), key bar,
-│   │              #   ⌘ modifier, Paste / Paste ↵ via /api/clipboard
+│   │              #   ⌘ modifier, Paste / Enter ↵ via /api/clipboard; video mode (<video> over
+│   │              #   the noVNC canvas, fbUpdateRequest blocked, taps mapped to the framebuffer)
 │   └── style.css  # Mobile-first dark theme
 ├── .claude/
 │   └── skills/
@@ -113,6 +118,13 @@ Flow B: Handoff (URL params ?dir=...&mode=...)
 Flow C: Mac screen (🖥 Screen button in the header → /screen.html)
   noVNC → /ws/vnc → 127.0.0.1:5900 (macOS Screen Sharing, ARD login in-browser)
   Text bar → POST /api/clipboard → pbcopy → ⌘V on the Mac
+  Video mode: POST /api/screen/offer → claude-remote-screencap stream (SCK → H.264,
+    length-prefixed Annex-B on stdout) → pion track → <video>; noVNC only sends input.
+    Locked Mac → 409 / "locked" event → VNC, polling /api/screen/state until unlocked
+    Taps: Screen Sharing's multi-display framebuffer layout is undocumented (Retina+4K →
+    6864×2160, side by side, bottom-aligned), so the page calibrates: it moves the pointer
+    to 2 framebuffer points per display and reads /api/screen/state's "cursor" back;
+    the per-display map is cached in localStorage per display layout
 ```
 
 ### Data Flow
@@ -213,6 +225,9 @@ Default: cloudflared quick tunnel. The server spawns `cloudflared tunnel --url h
 | `/ws/term` | WS | JWT | Terminal WebSocket (binary I/O to pty) |
 | `/ws/vnc` | WS | JWT + same-origin | noVNC ↔ macOS Screen Sharing (`127.0.0.1:5900`); 502 if Screen Sharing is off |
 | `/api/clipboard` | POST | JWT | `{"text":"..."}` (JSON only, ≤64KB) → `pbcopy` on the Mac |
+| `/api/screen/offer` | POST | JWT + same-origin | `{"sdp","display"}` WebRTC offer → `{"sdp","geometry"}` answer; starts capture (one viewer at a time); 409 `{"locked":true}` when the Mac is locked |
+| `/api/screen/stop` | POST | JWT + same-origin | Stop the video capture |
+| `/api/screen/state` | GET | JWT | `{"locked","desktop","displays","cursor"}` from `claude-remote-screencap state` |
 | `/*` | GET | No | Static files (HTML/JS/CSS) |
 
 ### MCP Tools

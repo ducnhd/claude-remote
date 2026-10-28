@@ -115,17 +115,31 @@ var (
 // off, and Screen Sharing then streams nothing but black; declaring user
 // activity brings back the lock screen so the password can be typed.
 func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
-	s.runScreenCmd(w, r, "wake", wakeCmd)
+	// caffeinate holds the assertion for its whole -t; the display is already
+	// waking when it starts, so answer then instead of 2 s later.
+	s.runScreenCmd(w, r, "wake", wakeCmd, true)
 }
 
 // handleLock sleeps the display. With "require password immediately" on, that
 // locks the Mac, so it can be left locked again after remote use.
 func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
-	s.runScreenCmd(w, r, "lock", lockCmd)
+	s.runScreenCmd(w, r, "lock", lockCmd, false)
 }
 
-func (s *Server) runScreenCmd(w http.ResponseWriter, r *http.Request, name string, argv []string) {
+func (s *Server) runScreenCmd(w http.ResponseWriter, r *http.Request, name string, argv []string, background bool) {
 	if !jsonPost(w, r) {
+		return
+	}
+	if background {
+		cmd := exec.Command(argv[0], argv[1:]...)
+		if err := cmd.Start(); err != nil {
+			log.Printf("screen %s: %v", name, err)
+			writeJSONError(w, http.StatusInternalServerError, "could not "+name+" the screen")
+			return
+		}
+		go cmd.Wait()
+		log.Printf("screen %s from %s", name, clientIP(r))
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 	if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
