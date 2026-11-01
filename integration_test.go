@@ -14,7 +14,7 @@ import (
 
 func TestFullAuthFlow(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	cfg.Save()
 
 	auth := NewAuth(cfg.SecretPath())
@@ -89,7 +89,7 @@ func TestFullAuthFlow(t *testing.T) {
 
 func TestWebSocketTerminal(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "cat", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubCat, DataDir: dir}
 
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
@@ -113,16 +113,18 @@ func TestWebSocketTerminal(t *testing.T) {
 	}
 	defer ws.Close()
 
-	ws.WriteMessage(websocket.BinaryMessage, []byte("hello\n"))
-	time.Sleep(300 * time.Millisecond)
+	ws.WriteMessage(websocket.BinaryMessage, []byte("hello\r"))
 
-	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, msg, err := ws.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(msg), "hello") {
-		t.Errorf("want echo of 'hello', got %q", string(msg))
+	// The echo may arrive after other output (a shell banner), so read on
+	// until it shows up.
+	ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var got strings.Builder
+	for !strings.Contains(got.String(), "hello") {
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatalf("want echo of 'hello', got %q (%v)", got.String(), err)
+		}
+		got.Write(msg)
 	}
 }
 
@@ -131,7 +133,7 @@ func TestFileBrowserAPI(t *testing.T) {
 	os.WriteFile(dir+"/readme.md", []byte("# Hello"), 0644)
 	os.Mkdir(dir+"/src", 0755)
 
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	cfg.Save()
 
 	auth := NewAuth(cfg.SecretPath())

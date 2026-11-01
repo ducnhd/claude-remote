@@ -34,17 +34,19 @@ func resolvePath(path string) string {
 // pathWithin reports whether path is dir itself or lives underneath it.
 // Both arguments must already be cleaned/resolved. A plain strings.HasPrefix
 // is not enough: "/Users/me/Desktop-secret" must not match "/Users/me/Desktop",
-// and an empty dir must never match everything.
+// and an empty dir must never match everything. On Windows the comparison
+// ignores case, as NTFS does.
 func pathWithin(path, dir string) bool {
 	if path == "" || dir == "" {
 		return false
 	}
-	path = filepath.Clean(path)
-	dir = filepath.Clean(dir)
+	path = fold(filepath.Clean(path))
+	dir = fold(filepath.Clean(dir))
 	if path == dir {
 		return true
 	}
-	if dir == string(filepath.Separator) {
+	// A root ("/", `C:\`) already ends in a separator.
+	if strings.HasSuffix(dir, string(filepath.Separator)) {
 		return strings.HasPrefix(path, dir)
 	}
 	return strings.HasPrefix(path, dir+string(filepath.Separator))

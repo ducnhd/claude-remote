@@ -9,7 +9,14 @@ import (
 )
 
 func TestValidatePath(t *testing.T) {
-	fb := &FileBrowser{allowedDirs: []string{"/Users/test"}}
+	// abs turns the Unix-style fixtures into absolute paths on Windows too.
+	abs := func(p string) string {
+		if p != "" && p[0] == '/' {
+			return filepath.VolumeName(os.TempDir()) + filepath.FromSlash(p)
+		}
+		return p
+	}
+	fb := &FileBrowser{allowedDirs: []string{abs("/Users/test")}}
 	tests := []struct {
 		name    string
 		path    string
@@ -31,7 +38,7 @@ func TestValidatePath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := fb.ValidatePath(tt.path)
+			_, err := fb.ValidatePath(abs(tt.path))
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidatePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}

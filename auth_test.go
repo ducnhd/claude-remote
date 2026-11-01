@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,7 +21,8 @@ func TestGenerateSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	// Windows has no Unix permission bits; the file inherits the profile ACL.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Errorf("want 0600, got %o", info.Mode().Perm())
 	}
 }

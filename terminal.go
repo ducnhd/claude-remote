@@ -6,13 +6,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 )
 
@@ -93,8 +91,7 @@ type TerminalManager struct {
 	cmd     string
 	args    []string
 	dir     string
-	ptmx    *os.File
-	process *exec.Cmd
+	pty     ptySession
 	buffer  *RingBuffer
 	clients map[*client]bool
 	mu      sync.Mutex
@@ -138,21 +135,15 @@ func (tm *TerminalManager) start(dir string, args []string) error {
 	}
 	tm.buffer.Clear()
 	tm.dir = dir
-	c := exec.Command(tm.cmd, args...)
-	c.Env = childEnv()
-	if dir != "" {
-		c.Dir = dir
-	}
-	ptmx, err := pty.Start(c)
+	sess, err := startPTY(tm.cmd, args, dir, childEnv())
 	if err != nil {
 		return fmt.Errorf("start pty: %w", err)
 	}
-	tm.ptmx = ptmx
-	tm.process = c
+	tm.pty = sess
 	tm.running = true
 	tm.gen++
 
-	tm.startIO(tm.gen, ptmx, c)
+	tm.startIO(tm.gen, sess)
 	return nil
 }
 
@@ -163,22 +154,29 @@ func (tm *TerminalManager) start(dir string, args []string) error {
 // the terminal draws, the kernel echoes raw characters, but nothing the phone
 // types ever reaches the application. PATH is widened for the same reason the
 // config needs an absolute claude_path — launchd's PATH is minimal.
+//
+// On Windows variable names are case-insensitive ("Path" is PATH), so keys
+// are matched through fold and keep the spelling they arrived with.
 func childEnv() []string {
 	env := map[string]string{}
+	names := map[string]string{}
 	var order []string
 	set := func(k, v string) {
-		if _, seen := env[k]; !seen {
-			order = append(order, k)
+		key := fold(k)
+		if _, seen := env[key]; !seen {
+			order = append(order, key)
+			names[key] = k
 		}
-		env[k] = v
+		env[key] = v
 	}
+	get := func(k string) string { return env[fold(k)] }
 	for _, kv := range os.Environ() {
 		if i := strings.IndexByte(kv, '='); i > 0 {
 			set(kv[:i], kv[i+1:])
 		}
 	}
 	fallback := func(k, v string) {
-		if env[k] == "" {
+		if get(k) == "" {
 			set(k, v)
 		}
 	}
@@ -188,30 +186,26 @@ func childEnv() []string {
 
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		fallback("HOME", home)
-		path := env["PATH"]
-		for _, dir := range []string{
-			filepath.Join(home, ".local", "bin"),
-			filepath.Join(home, "bin"),
-			"/opt/homebrew/bin",
-			"/usr/local/bin",
-		} {
+		sep := string(os.PathListSeparator)
+		path := get("PATH")
+		for _, dir := range extraPathDirs(home) {
 			if !pathHasDir(path, dir) {
-				path = dir + ":" + path
+				path = dir + sep + path
 			}
 		}
-		set("PATH", strings.TrimSuffix(path, ":"))
+		set("PATH", strings.TrimSuffix(path, sep))
 	}
 
 	out := make([]string, 0, len(order))
 	for _, k := range order {
-		out = append(out, k+"="+env[k])
+		out = append(out, names[k]+"="+env[k])
 	}
 	return out
 }
 
 func pathHasDir(path, dir string) bool {
-	for _, p := range strings.Split(path, ":") {
-		if p == dir {
+	for _, p := range filepath.SplitList(path) {
+		if fold(p) == fold(dir) {
 			return true
 		}
 	}
@@ -220,11 +214,11 @@ func pathHasDir(path, dir string) bool {
 
 // startIO launches goroutines to read pty output and wait for process exit.
 // Must be called with tm.mu held and tm.running == true.
-func (tm *TerminalManager) startIO(gen uint64, ptmx *os.File, proc *exec.Cmd) {
+func (tm *TerminalManager) startIO(gen uint64, sess ptySession) {
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, err := ptmx.Read(buf)
+			n, err := sess.Read(buf)
 			if n > 0 {
 				data := make([]byte, n)
 				copy(data, buf[:n])
@@ -238,25 +232,25 @@ func (tm *TerminalManager) startIO(gen uint64, ptmx *os.File, proc *exec.Cmd) {
 	}()
 
 	go func() {
-		if err := proc.Wait(); err != nil {
+		if err := sess.Wait(); err != nil {
 			log.Printf("claude process exited: %v", err)
 		}
-		tm.markStopped(gen, ptmx)
+		tm.markStopped(gen, sess)
 	}()
 }
 
 // markStopped clears session state only if gen is still the current session.
-func (tm *TerminalManager) markStopped(gen uint64, ptmx *os.File) {
+// A non-nil sess is closed either way.
+func (tm *TerminalManager) markStopped(gen uint64, sess ptySession) {
 	tm.mu.Lock()
 	stale := tm.gen != gen
 	if !stale {
 		tm.running = false
-		tm.ptmx = nil
-		tm.process = nil
+		tm.pty = nil
 	}
 	tm.mu.Unlock()
-	if ptmx != nil {
-		ptmx.Close()
+	if sess != nil {
+		sess.Close()
 	}
 }
 
@@ -297,30 +291,28 @@ func (tm *TerminalManager) Running() bool {
 
 func (tm *TerminalManager) Stop() {
 	tm.mu.Lock()
-	proc, ptmx := tm.process, tm.ptmx
-	tm.process, tm.ptmx = nil, nil
+	sess := tm.pty
+	tm.pty = nil
 	tm.running = false
 	tm.gen++ // invalidate goroutines of the session being torn down
 	tm.mu.Unlock()
 
-	if proc != nil && proc.Process != nil {
+	if sess != nil {
 		// The Wait goroutine started by startIO reaps the process; calling
 		// Wait a second time here would race inside os/exec.
-		proc.Process.Kill()
-	}
-	if ptmx != nil {
-		ptmx.Close()
+		sess.Kill()
+		sess.Close()
 	}
 }
 
 func (tm *TerminalManager) Resize(rows, cols uint16) error {
 	tm.mu.Lock()
-	ptmx := tm.ptmx
+	sess := tm.pty
 	tm.mu.Unlock()
-	if ptmx == nil {
+	if sess == nil {
 		return fmt.Errorf("no active session")
 	}
-	return pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
+	return sess.Resize(rows, cols)
 }
 
 func (tm *TerminalManager) WebSocketHandler() func(http.ResponseWriter, *http.Request) {
@@ -387,7 +379,7 @@ func (tm *TerminalManager) WebSocketHandler() func(http.ResponseWriter, *http.Re
 			}
 			conn.SetReadDeadline(time.Now().Add(pongTimeout))
 			tm.mu.Lock()
-			ptmx := tm.ptmx
+			sess := tm.pty
 			tm.mu.Unlock()
 
 			switch msgType {
@@ -397,11 +389,11 @@ func (tm *TerminalManager) WebSocketHandler() func(http.ResponseWriter, *http.Re
 				}
 				fallthrough
 			case websocket.BinaryMessage:
-				if ptmx == nil {
+				if sess == nil {
 					c.write(websocket.TextMessage, []byte("\r\nNo active session.\r\n"))
 					continue
 				}
-				if _, err := ptmx.Write(msg); err != nil {
+				if _, err := sess.Write(msg); err != nil {
 					log.Printf("pty write: %v", err)
 				}
 			}

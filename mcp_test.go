@@ -18,7 +18,7 @@ func setupMCPServer(t *testing.T) *Server {
 
 func setupMCPServerDir(t *testing.T, dir string) *Server {
 	t.Helper()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	s := NewServer(cfg, auth)
@@ -123,7 +123,7 @@ func TestMCPToolCallStatus(t *testing.T) {
 func TestMCPToolCallHandoff(t *testing.T) {
 	dir := t.TempDir()
 	s := setupMCPServerDir(t, dir)
-	body := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"handoff","arguments":{"dir":"` + dir + `"}}}`
+	body := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"handoff","arguments":{"dir":` + jsonQuote(dir) + `}}}`
 	w := mcpPost(t, s, body)
 
 	if w.Code != 200 {

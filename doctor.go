@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -98,7 +99,7 @@ func cmdDoctor() {
 	} else if info, err := os.Stat(claudePath); err != nil {
 		add(check{"Claude CLI", statusFail, claudePath + " does not exist",
 			`fix "claude_path" in ~/.claude-remote/config.json`})
-	} else if info.Mode()&0111 == 0 {
+	} else if runtime.GOOS != "windows" && info.Mode()&0111 == 0 {
 		add(check{"Claude CLI", statusFail, claudePath + " is not executable", "chmod +x " + claudePath})
 	} else {
 		add(check{"Claude CLI", statusOK, claudePath, ""})
@@ -127,21 +128,17 @@ func cmdDoctor() {
 	if statusErr != nil {
 		if portInUse(cfg.Port) {
 			add(check{"Server", statusWarn, fmt.Sprintf("port %d is busy but /local/status did not answer (old build?)", cfg.Port),
-				"make install && launchctl kickstart -k gui/$(id -u)/com.claude-remote"})
+				restartHint})
 		} else {
 			add(check{"Server", statusFail, "not running: " + statusErr.Error(),
-				"claude-remote serve   (or: make install to run it at login)"})
+				"claude-remote serve   (or: claude-remote install to run it at login)"})
 		}
 	} else {
 		add(check{"Server", statusOK, fmt.Sprintf("v%s, session running: %v", st.Version, st.Running), ""})
 	}
 
-	// --- launchd ---
-	if out, err := exec.Command("launchctl", "list", "com.claude-remote").Output(); err == nil && len(out) > 0 {
-		add(check{"Auto-start", statusOK, "launchd job loaded", ""})
-	} else {
-		add(check{"Auto-start", statusWarn, "launchd job not loaded", "claude-remote install"})
-	}
+	// --- Auto-start (launchd / Task Scheduler) ---
+	add(autostartCheck())
 
 	// --- Tunnel ---
 	checks = append(checks, tunnelChecks(cfg, st)...)
@@ -207,7 +204,7 @@ func tunnelChecks(cfg *Config, st *localStatus) []check {
 	}
 	out := []check{}
 	if path, err := exec.LookPath(bin); err != nil {
-		out = append(out, check{"cloudflared", statusFail, "not installed", "brew install cloudflared"})
+		out = append(out, check{"cloudflared", statusFail, "not installed", cloudflaredInstallHint})
 		return out
 	} else {
 		out = append(out, check{"cloudflared", statusOK, path, ""})
@@ -233,7 +230,7 @@ func tunnelChecks(cfg *Config, st *localStatus) []check {
 			detail += " — " + st.TunnelError
 		}
 		out = append(out, check{"Tunnel", statusFail, detail,
-			"check ~/.claude-remote/server.log, then: launchctl kickstart -k gui/$(id -u)/com.claude-remote"})
+			"check ~/.claude-remote/server.log, then: " + restartHint})
 	}
 	return out
 }

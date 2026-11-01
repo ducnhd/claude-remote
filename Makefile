@@ -48,6 +48,9 @@ install: build
 	# means UI changes silently never reach the phone.
 	mkdir -p $(HOME)/bin/static
 	cp -R static/. $(HOME)/bin/static/
+	# The skill lets "handoff to phone" work in every project, not just this one.
+	mkdir -p $(HOME)/.claude/skills/claude-remote
+	cp .claude/skills/claude-remote/SKILL.md $(HOME)/.claude/skills/claude-remote/
 	mkdir -p $(HOME)/Library/LaunchAgents
 	sed 's|__HOME__|$(HOME)|g' $(PLIST_SRC) > $(PLIST_DST)
 	# bootout+bootstrap, not load/kickstart: `load` is a no-op on an already

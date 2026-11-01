@@ -15,7 +15,7 @@ import (
 
 func TestHealthEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	s := NewServer(cfg, auth)
@@ -31,7 +31,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestAuthScanValidToken(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	token := auth.GenerateToken()
@@ -57,7 +57,7 @@ func TestAuthScanValidToken(t *testing.T) {
 
 func TestAuthScanInvalidToken(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	s := NewServer(cfg, auth)
@@ -73,7 +73,7 @@ func TestAuthScanInvalidToken(t *testing.T) {
 
 func TestProtectedRouteWithoutAuth(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	s := NewServer(cfg, auth)
@@ -89,7 +89,7 @@ func TestProtectedRouteWithoutAuth(t *testing.T) {
 
 func TestHandoffValidToken(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	token := auth.GenerateHandoffToken()
@@ -122,7 +122,7 @@ func TestHandoffValidToken(t *testing.T) {
 
 func TestHandoffInvalidToken(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	s := NewServer(cfg, auth)
@@ -138,14 +138,14 @@ func TestHandoffInvalidToken(t *testing.T) {
 
 func TestClaudeStartWithResume(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	jwt, _ := auth.IssueJWT("test-device")
 	s := NewServer(cfg, auth)
 	s.registerRoutes()
 
-	body := `{"dir":"` + dir + `","resume":true}`
+	body := `{"dir":` + jsonQuote(dir) + `,"resume":true}`
 	req := httptest.NewRequest("POST", "/api/claude/start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "claude-remote-auth", Value: jwt})
@@ -167,7 +167,7 @@ func TestClaudeStartRejectsSiblingPrefixDir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cfg := &Config{Port: 8822, AllowedDirs: []string{allowed}, ClaudePath: "echo", DataDir: root}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{allowed}, ClaudePath: stubClaude, DataDir: root}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestClaudeStartRejectsSiblingPrefixDir(t *testing.T) {
 // Error bodies must stay valid JSON even when the message embeds a path.
 func TestClaudeStartErrorBodyIsJSON(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestClaudeStartErrorBodyIsJSON(t *testing.T) {
 // The handoff redirect must escape directories containing spaces and "&".
 func TestHandoffRedirectEscapesDir(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ func TestHandoffRedirectEscapesDir(t *testing.T) {
 // An unknown mode falls back to the picker instead of reaching the UI.
 func TestHandoffRejectsUnknownMode(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestHandoffRejectsUnknownMode(t *testing.T) {
 // HTTPS: the cookie must still be marked Secure or the browser drops it.
 func TestAuthCookieSecureBehindTunnel(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir,
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir,
 		Tunnel: Tunnel{Mode: TunnelQuick}}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
@@ -319,7 +319,7 @@ func TestAuthCookieSecureBehindTunnel(t *testing.T) {
 // on the public internet.
 func TestAuthScanIsRateLimited(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -347,7 +347,7 @@ func TestAuthScanIsRateLimited(t *testing.T) {
 // a third of its life is silently refreshed.
 func TestProtectRefreshesAgingCookie(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func TestProtectRefreshesAgingCookie(t *testing.T) {
 // A fresh cookie must not be re-issued on every single request.
 func TestProtectLeavesFreshCookieAlone(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)
@@ -415,7 +415,7 @@ func TestProtectLeavesFreshCookieAlone(t *testing.T) {
 // The pairing endpoint is loopback-only and must reject tunnel traffic.
 func TestLocalPairRejectsForwardedRequest(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 8822, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.GenerateSecret(); err != nil {
 		t.Fatal(err)

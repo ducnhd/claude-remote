@@ -141,6 +141,14 @@
     const XK_RETURN = 0xff0d;
     const XK_SHIFT_L = 0xffe1;
     const XK_V = 0x0076;
+    const XK_CONTROL_L = 0xffe3;
+    // The key the sticky modifier button holds and paste uses: ⌘ on a Mac,
+    // Ctrl on a Windows host (switched once /api/claude/status answers).
+    let modKey = { sym: XK_SUPER_L, code: 'MetaLeft' };
+    // Set from /api/claude/status: a Windows host words things differently
+    // and is unlocked through Ctrl+Alt+Del.
+    let hostWindows = false;
+    let hostName = 'Mac';
 
     const vncEl = document.getElementById('vnc');
     const statusEl = document.getElementById('screen-status');
@@ -155,6 +163,7 @@
     let rfb = null;
     let cmdOn = false;
     let connected = false;
+    let authFailed = false;
 
     try { userEl.value = localStorage.getItem('vnc-user') || ''; } catch (e) {}
 
@@ -167,6 +176,7 @@
     function connect() {
       if (rfb) { rfb.disconnect(); rfb = null; }
       connected = false;
+      authFailed = false;
       setStatus('Connecting…', false);
       const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/vnc';
       rfb = new RFB(vncEl, url, { wsProtocols: ['binary'] });
@@ -192,18 +202,25 @@
         login.classList.remove('show');
         if (connected) {
           setStatus('Disconnected — tap ↻ to reconnect', false);
-        } else {
+        } else if (!authFailed) {
           // A failed handshake is usually Screen Sharing being off, or the
           // session cookie having expired (the proxy answers 401/502).
           setStatus('Cannot connect — is Screen Sharing on, and are you paired?', false);
         }
       });
-      rfb.addEventListener('credentialsrequired', () => {
+      rfb.addEventListener('credentialsrequired', (e) => {
+        // macOS Screen Sharing asks for a user name too; plain VNC servers
+        // (TightVNC, UltraVNC on Windows) only for a password.
+        const types = (e.detail && e.detail.types) || ['username', 'password'];
+        const needUser = types.includes('username');
+        userEl.hidden = !needUser;
         login.classList.add('show');
-        setStatus('Waiting for Mac login…', false);
-        (userEl.value ? passEl : userEl).focus();
+        setStatus('Waiting for ' + hostName + ' login…', false);
+        (needUser && !userEl.value ? userEl : passEl).focus();
       });
       rfb.addEventListener('securityfailure', (e) => {
+        // The disconnect that follows must not replace this message.
+        authFailed = true;
         setStatus('Login failed: ' + (e.detail.reason || 'wrong user name or password'), false);
       });
       rfb.addEventListener('desktopname', (e) => {
@@ -241,7 +258,7 @@
     }
     document.getElementById('btn-wake').addEventListener('click', () => screenCmd('wake'));
     document.getElementById('btn-lock').addEventListener('click', async () => {
-      if (!confirm('Lock the Mac now? You will need the Mac password to get back in.')) return;
+      if (!confirm('Lock the ' + hostName + ' now? You will need its password to get back in.')) return;
       if (await screenCmd('lock')) setStatus('Locked — tap ☀ then type your password with ⌨', connected);
     });
 
@@ -636,9 +653,9 @@
       lockQuiet = true; // before stopVideo, so it does not restart VNC pixels
       stopVideo();
       if (lockPoll) return;
-      if (connected) setStatus('Connected — Mac is locked', true);
-      else statusEl.textContent = 'Mac is locked — log in to Screen Sharing to unlock it';
-      showUnlock('Enter the Mac password: it is typed on the lock screen, then Enter. It is not stored.');
+      if (connected) setStatus('Connected — ' + hostName + ' is locked', true);
+      else statusEl.textContent = hostName + ' is locked — log in to Screen Sharing to unlock it';
+      showUnlock(unlockPrompt());
       lockPoll = setInterval(async () => {
         try {
           const res = await fetch('/api/screen/state');
@@ -670,11 +687,24 @@
     // Wake the display and the lock screen's UI (a Shift press through Screen
     // Sharing), at most every few seconds. /api/screen/wake is not awaited:
     // it may answer only after caffeinate's 2 s.
+    let lastCAD = 0;
     function preWake() {
       if (Date.now() - lastWake < 4000) return;
       lastWake = Date.now();
       screenCmd('wake');
-      if (connected) rfb.sendKey(XK_SHIFT_L);
+      if (!connected) return;
+      if (!hostWindows) { rfb.sendKey(XK_SHIFT_L); return; }
+      // Windows: Ctrl+Alt+Del lifts the lock curtain and focuses the
+      // password (or PIN) box, whether or not policy requires it. Once is
+      // enough; repeating it while the password is typed is not needed.
+      if (Date.now() - lastCAD < 30000) return;
+      lastCAD = Date.now();
+      rfb.sendCtrlAltDel();
+    }
+    function unlockPrompt() {
+      return hostWindows
+        ? 'Enter the Windows password or PIN: it is typed on the lock screen, then Enter. It is not stored.'
+        : 'Enter the Mac password: it is typed on the lock screen, then Enter. It is not stored.';
     }
     unlockPass.addEventListener('focus', preWake);
     unlockPass.addEventListener('input', preWake);
@@ -897,16 +927,16 @@
     function press(keysym) {
       if (!rfb || !connected) return;
       noteInput();
-      if (cmdOn) rfb.sendKey(XK_SUPER_L, 'MetaLeft', true);
+      if (cmdOn) rfb.sendKey(modKey.sym, modKey.code, true);
       rfb.sendKey(keysym);
       if (cmdOn) {
-        rfb.sendKey(XK_SUPER_L, 'MetaLeft', false);
+        rfb.sendKey(modKey.sym, modKey.code, false);
         cmdOn = false;
         cmdBtn.classList.remove('on');
       }
     }
 
-    // Put text on the Mac clipboard, then ⌘V it into the focused app.
+    // Put text on the host clipboard, then ⌘V (Ctrl+V) it into the focused app.
     let pasteQueue = Promise.resolve();
     function pasteText(text) {
       pasteQueue = pasteQueue.then(async () => {
@@ -917,9 +947,9 @@
           body: JSON.stringify({ text }),
         });
         if (!res.ok) { setStatus('Paste failed (' + res.status + ')', false); return; }
-        rfb.sendKey(XK_SUPER_L, 'MetaLeft', true);
+        rfb.sendKey(modKey.sym, modKey.code, true);
         rfb.sendKey(XK_V, 'KeyV');
-        rfb.sendKey(XK_SUPER_L, 'MetaLeft', false);
+        rfb.sendKey(modKey.sym, modKey.code, false);
         noteInput();
       }).catch(() => setStatus('Paste failed', false));
       return pasteQueue;
@@ -993,9 +1023,40 @@
       resetKbd();
     });
 
-    connect();
-    showMode();
-    startVideo();
+    // A Windows host pastes with Ctrl+V and has no screen video helper, so it
+    // stays on plain VNC (not saved: the Mac preference is left alone). Ask
+    // first: VNC's login prompt already words itself after the host.
+    fetch('/api/claude/status').then((r) => r.json()).catch(() => ({})).then((st) => {
+      if (st.os === 'windows') {
+        hostWindows = true;
+        hostName = 'PC';
+        modKey = { sym: XK_CONTROL_L, code: 'ControlLeft' };
+        cmdBtn.textContent = 'Ctrl';
+        mode = 'vnc';
+        modeBtn.hidden = true;
+        document.querySelector('#login h2').textContent = 'VNC login';
+        document.querySelector('#login p').textContent = 'The password of the VNC server on this PC. It is never stored.';
+        document.querySelector('#unlock h2').textContent = '🔒 The PC is locked';
+        unlockMsg.textContent = unlockPrompt();
+        unlockPass.placeholder = 'Windows password or PIN';
+        for (const id of ['btn-wake', 'btn-unlock', 'btn-lock']) {
+          const b = document.getElementById(id);
+          b.title = b.title.replace(/the Mac/g, 'the PC');
+        }
+        // No video stream reports the lock here, so ask the server: it
+        // watches for the Windows lock screen (LogonUI.exe).
+        setInterval(async () => {
+          if (!connected || lockPoll || lockQuiet || document.hidden) return;
+          try {
+            const res = await fetch('/api/screen/state');
+            if (res.ok && (await res.json()).locked) lockedFallback();
+          } catch (e) {}
+        }, 3000);
+      }
+      connect();
+      showMode();
+      startVideo();
+    });
   </script>
 </body>
 </html>

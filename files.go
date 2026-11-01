@@ -81,7 +81,7 @@ func hasDotDot(path string) bool {
 func containsComponent(path, component string) bool {
 	parts := strings.Split(path, string(filepath.Separator))
 	for _, part := range parts {
-		if part == component {
+		if fold(part) == fold(component) {
 			return true
 		}
 		if component == ".env" && strings.HasPrefix(part, ".env") {

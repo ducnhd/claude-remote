@@ -113,7 +113,7 @@ func (tn *TunnelManager) Start() error {
 		return fmt.Errorf("tunnel mode \"named\" requires a token in config.json")
 	}
 	if _, err := exec.LookPath(tn.binName()); err != nil {
-		return fmt.Errorf("cloudflared not found — install it with: brew install cloudflared")
+		return fmt.Errorf("cloudflared not found — install it with: %s", cloudflaredInstallHint)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

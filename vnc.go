@@ -48,8 +48,7 @@ func (s *Server) handleVNC(w http.ResponseWriter, r *http.Request) {
 	conn, err := net.DialTimeout("tcp", vncAddr, 3*time.Second)
 	if err != nil {
 		log.Printf("VNC dial %s: %v", vncAddr, err)
-		writeJSONError(w, http.StatusBadGateway,
-			"Screen Sharing is off: enable it in System Settings → General → Sharing")
+		writeJSONError(w, http.StatusBadGateway, vncOffMessage)
 		return
 	}
 	ws, err := vncUpgrader.Upgrade(w, r, nil)
@@ -62,14 +61,12 @@ func (s *Server) handleVNC(w http.ResponseWriter, r *http.Request) {
 	log.Printf("VNC session closed")
 }
 
-// pbcopyPath is swapped out in tests.
-var pbcopyPath = "/usr/bin/pbcopy"
-
 const maxClipboardBytes = 64 * 1024
 
-// handleClipboard puts text on the Mac clipboard so the screen page can paste
-// it with ⌘V. Screen Sharing drops Unicode keysyms, so Vietnamese (or any
-// non-ASCII text) typed key by key never arrives; a paste always does.
+// handleClipboard puts text on the host clipboard so the screen page can
+// paste it with ⌘V (Ctrl+V on Windows). Screen Sharing drops Unicode keysyms,
+// so Vietnamese (or any non-ASCII text) typed key by key never arrives; a
+// paste always does.
 func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 	if !jsonPost(w, r) {
 		return
@@ -81,13 +78,8 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON or text too long")
 		return
 	}
-	cmd := exec.Command(pbcopyPath)
-	// pbcopy reads stdin in the locale's encoding; launchd gives us no LANG,
-	// which would turn every non-ASCII character into garbage.
-	cmd.Env = childEnv()
-	cmd.Stdin = strings.NewReader(body.Text)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("pbcopy: %v %s", err, out)
+	if err := setClipboard(body.Text); err != nil {
+		log.Printf("clipboard: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not set the clipboard")
 		return
 	}
@@ -104,12 +96,6 @@ func jsonPost(w http.ResponseWriter, r *http.Request) bool {
 	}
 	return true
 }
-
-// Swapped out in tests.
-var (
-	wakeCmd = []string{"/usr/bin/caffeinate", "-u", "-t", "2"}
-	lockCmd = []string{"/usr/bin/pmset", "displaysleepnow"}
-)
 
 // handleWake turns the display back on. A locked Mac often has its display
 // off, and Screen Sharing then streams nothing but black; declaring user

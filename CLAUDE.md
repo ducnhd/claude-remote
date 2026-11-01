@@ -6,7 +6,7 @@
 
 **Core idea**: Mac runs a Go server that wraps Claude Code in a pseudo-terminal, exposes it via WebSocket, and provides a mobile-friendly chat UI. Phone reaches it through a Cloudflare Tunnel managed by the server itself (Tailscale/LAN still supported via `"tunnel": {"mode":"off"}`). Claude Code connects via MCP (localhost HTTP on port 8823) to generate handoff QR codes. Auth via one-time QR code scan, persistent JWT cookie (SameSite=Lax for cross-site QR scan compatibility). Auto-starts on Mac boot via launchd.
 
-**Target**: Single user, single Mac. Personal tool, not a product.
+**Target**: Single user, single Mac. Personal tool, not a product. Windows 10 1809+/11 also runs it (ConPTY instead of a pty, Task Scheduler instead of launchd); screen video mode stays macOS only.
 
 ## Build & Run
 
@@ -49,7 +49,7 @@ MCP tools are available globally in Claude Code. Just ask:
 - "handoff to phone"
 - "generate QR for phone"
 
-Claude calls the `handoff` MCP tool and displays QR. In Claude Code CLI, `/handoff` skill also works.
+Claude calls the `handoff` MCP tool and displays QR. The `claude-remote` skill (`.claude/skills/claude-remote/SKILL.md`) is copied to `~/.claude/skills/` by `make install` / `install.ps1`, so the phrases trigger it in every project.
 
 ## Architecture
 
@@ -67,6 +67,10 @@ Go binary (single process, two listeners when TLS active)
 │                  #   handoff tokens (15min expiry, one-time), auth logging
 ├── terminal.go    # WebSocket + pty: spawn claude in chosen dir or with --continue,
 │                  #   pipe stdin/stdout via startIO(), ring buffer, multi-client broadcast
+├── pty.go         # ptySession interface; pty_unix.go (creack/pty) / pty_windows.go (ConPTY)
+├── platform_unix.go / platform_windows.go
+│                  # fold (case rules), extra PATH dirs, setClipboard (pbcopy / Win32),
+│                  #   wake/lock commands, doctor hints, install/uninstall (launchd / schtasks)
 ├── vnc.go         # /ws/vnc: byte pipe from noVNC to macOS Screen Sharing (127.0.0.1:5900),
 │                  #   /api/clipboard: pbcopy so non-ASCII text can be pasted with ⌘V
 ├── video.go       # Screen video mode: runs claude-remote-screencap, relays its H.264 over
@@ -85,13 +89,15 @@ Go binary (single process, two listeners when TLS active)
 │   └── style.css  # Mobile-first dark theme
 ├── .claude/
 │   └── skills/
-│       ├── remote.md       # /handoff skill — calls MCP handoff tool
+│       ├── claude-remote/SKILL.md  # handoff skill (also installed globally) — calls MCP tools
 │       ├── architecture.md # Component map + design rules
 │       ├── auth-flow.md    # Pairing, handoff, cookie lifecycle
 │       ├── deployment.md   # make install, signing, tunnel modes, troubleshooting
 │       └── testing.md      # Test files + patterns
-└── launchd/
-    └── com.claude-remote.plist  # __HOME__ placeholder, templated by `make install`
+├── launchd/
+│   └── com.claude-remote.plist  # __HOME__ placeholder, templated by `make install`
+└── scripts/
+    └── install.ps1  # Windows `make install`: build, copy exe + static\ to ~\bin, register task
 ```
 
 ### Web UI Flow
@@ -164,7 +170,12 @@ Go server (mcp.go)
 - **MCP localhost-only** — `/mcp` rejects non-loopback IPs
 - **Absolute claude_path** — config.json must use absolute path (e.g., `/Users/you/.local/bin/claude`); launchd PATH may not include `~/.local/bin`
 - **startIO() shared** — both StartInDir and StartWithResume use same goroutine pattern; process exit is logged
-- **`childEnv()` for child processes** — launchd gives the server no `TERM`/`LANG` and a minimal `PATH`; passing `os.Environ()` straight through left the Claude TUI unable to read keystrokes and made `pbcopy` mangle non-ASCII. `childEnv()` fills `TERM=xterm-256color`, `COLORTERM`, `LANG=en_US.UTF-8` and prepends `~/.local/bin`, `~/bin`, Homebrew dirs to `PATH`
+- **`childEnv()` for child processes** — launchd gives the server no `TERM`/`LANG` and a minimal `PATH`; passing `os.Environ()` straight through left the Claude TUI unable to read keystrokes and made `pbcopy` mangle non-ASCII. `childEnv()` fills `TERM=xterm-256color`, `COLORTERM`, `LANG=en_US.UTF-8` and prepends `~/.local/bin`, `~/bin`, Homebrew dirs to `PATH` (`%APPDATA%\npm` on Windows, where env names are matched case-insensitively via `fold()` so `Path` is not duplicated)
+- **Windows: ConPTY** — `pty_windows.go` calls `CreatePseudoConsole` + `CreateProcess` directly (os/exec cannot attach a pseudo-console). Std handles are set to `INVALID_HANDLE_VALUE`: otherwise a child of a server whose stdout is a pipe/log file writes there instead of to the console, and NULL handles leave stdin closed. `.cmd`/`.bat` (npm's `claude.cmd`) run under `cmd.exe /d /s /c`. The output pipe never EOFs on process exit; `Close()` (ClosePseudoConsole) is what ends `Read`
+- **Windows: auto-start** — Task Scheduler task `claude-remote` at logon, action `conhost.exe --headless claude-remote.exe serve --log <server.log>` (no console window; `--log` replaces launchd's stdout redirect). Task XML is written UTF-16LE for schtasks
+- **Windows: paths** — `pathWithin` and dotfile component checks compare through `fold()` (upper-case on Windows), and a drive root `C:\` is handled like `/`
+- **Windows: screen page** — `/api/claude/status` returns `"os"` (fetched before VNC connects); on `windows` the page uses Ctrl instead of ⌘, asks only for the VNC password, never starts video mode, and polls `/api/screen/state` (locked = `LogonUI.exe` running) to offer the unlock form, which sends Ctrl+Alt+Del then the password
+- **Windows: job object** — `serve` puts itself in a KILL_ON_JOB_CLOSE job so cloudflared/claude die with it. `schtasks /End` only kills the headless conhost, so `install`/`uninstall` (`stopServer`) and `install.ps1` terminate the server process too
 - **Inline TUI forced** — `claudeArgs` passes `--settings {"tui":"default"}` (also on `--continue`). The fullscreen TUI uses the alternate screen, which has no scrollback, so the phone could not scroll back
 - **`Cache-Control: no-cache` on static** — `noStore()` wrapper; mobile Safari otherwise serves a stale `app.js` for months
 - **Access log** — `accessLog()` logs every public request (`REQ ... → status`), its `statusRecorder` implements `Hijack` so WebSocket upgrades still work
@@ -266,7 +277,7 @@ go test ./... -v -count=1       # All tests
 go test -race ./... -v -count=1 # With race detector
 ```
 
-Test files: `auth_test.go`, `config_test.go`, `files_test.go`, `paths_test.go`, `ratelimit_test.go`, `terminal_test.go`, `tunnel_test.go`, `server_test.go`, `mcp_test.go`, `vnc_test.go`, `integration_test.go`.
+Test files: `auth_test.go`, `config_test.go`, `files_test.go`, `paths_test.go`, `ratelimit_test.go`, `terminal_test.go`, `tunnel_test.go`, `server_test.go`, `mcp_test.go`, `vnc_test.go`, `integration_test.go`, `platform_{unix,windows}_test.go`. Per-OS stand-ins for the claude process (`echoCommand`, `stubClaude`, …) live in `testcmd_{unix,windows}_test.go`; tests whose fakes are shell scripts call `skipWithoutSh`.
 
 ## Deployment
 
@@ -291,5 +302,7 @@ claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 ```
 
 `make install` copies `static/` next to the binary; the server serves `<binary dir>/static`, so skipping that step means UI changes never reach the phone.
+
+Windows: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1` does the same (build, copy to `~\bin`, `claude-remote install`). `winget install --id Cloudflare.cloudflared` for the tunnel; the screen page needs a VNC server on `127.0.0.1:5900`.
 
 Tailscale (`"tunnel": {"mode":"off"}`) still needs `sudo tailscale cert <hostname>.ts.net` and the cert/key copied into `~/.claude-remote/` (chown to your user).

@@ -88,6 +88,7 @@ func TestUploadRejectsForeignOrigin(t *testing.T) {
 }
 
 func TestUploadConvertsHEIC(t *testing.T) {
+	skipWithoutSh(t)
 	// Fake sips: "convert" by copying a PNG to the --out path.
 	dir := t.TempDir()
 	pngFile := filepath.Join(dir, "src.png")

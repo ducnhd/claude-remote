@@ -20,6 +20,7 @@ import (
 // frames.bin (length-prefixed access units) on stdout.
 func fakeScreencap(t *testing.T, stderrLines ...string) (dir string) {
 	t.Helper()
+	skipWithoutSh(t)
 	dir = t.TempDir()
 	// One tiny "IDR" access unit: SPS, PPS and a slice, each Annex-B.
 	au := []byte{0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f, 0, 0, 0, 1, 0x68, 0xce, 0x3c, 0x80, 0, 0, 0, 1, 0x65, 0x88, 0x84, 0x00}
@@ -57,7 +58,7 @@ const (
 func videoTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: "echo", DataDir: dir}
+	cfg := &Config{Port: 0, AllowedDirs: []string{dir}, ClaudePath: stubClaude, DataDir: dir}
 	auth := NewAuth(cfg.SecretPath())
 	auth.GenerateSecret()
 	s := NewServer(cfg, auth)

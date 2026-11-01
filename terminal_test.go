@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +45,8 @@ func TestRingBufferReplay(t *testing.T) {
 }
 
 func TestTerminalSpawnEcho(t *testing.T) {
-	tm := NewTerminalManager("echo", []string{"hello from pty"})
+	name, args := echoCommand()
+	tm := NewTerminalManager(name, append(args, "hello from pty"))
 	if err := tm.StartInDir(""); err != nil {
 		t.Fatal(err)
 	}
@@ -60,27 +60,30 @@ func TestTerminalSpawnEcho(t *testing.T) {
 }
 
 func TestTerminalDir(t *testing.T) {
-	tm := NewTerminalManager("echo", []string{"dir test"})
-	if err := tm.StartInDir("/tmp"); err != nil {
+	name, args := echoCommand()
+	tm := NewTerminalManager(name, append(args, "dir test"))
+	dir := t.TempDir()
+	if err := tm.StartInDir(dir); err != nil {
 		t.Fatal(err)
 	}
 	defer tm.Stop()
 
-	if tm.dir != "/tmp" {
-		t.Errorf("want tm.dir == /tmp, got %q", tm.dir)
+	if tm.dir != dir {
+		t.Errorf("want tm.dir == %q, got %q", dir, tm.dir)
 	}
 }
 
 func TestStartWithResume(t *testing.T) {
 	// Use "echo" as a stand-in; "--continue" is just another arg for echo
-	tm := NewTerminalManager("echo", nil)
-	if err := tm.StartWithResume("/tmp"); err != nil {
+	tm := NewTerminalManager(echoCommand())
+	dir := t.TempDir()
+	if err := tm.StartWithResume(dir); err != nil {
 		t.Fatal(err)
 	}
 	defer tm.Stop()
 
-	if tm.dir != "/tmp" {
-		t.Errorf("want tm.dir == /tmp, got %q", tm.dir)
+	if tm.dir != dir {
+		t.Errorf("want tm.dir == %q, got %q", dir, tm.dir)
 	}
 
 	time.Sleep(300 * time.Millisecond)
@@ -91,7 +94,7 @@ func TestStartWithResume(t *testing.T) {
 }
 
 func TestTerminalWebSocket(t *testing.T) {
-	tm := NewTerminalManager("cat", nil) // cat echoes input
+	tm := NewTerminalManager(catCommand()) // echoes input
 	// Pre-start terminal before connecting WebSocket
 	if err := tm.StartInDir(""); err != nil {
 		t.Fatal(err)
@@ -109,16 +112,19 @@ func TestTerminalWebSocket(t *testing.T) {
 	}
 	defer ws.Close()
 
-	ws.WriteMessage(websocket.BinaryMessage, []byte("test input\n"))
-	time.Sleep(300 * time.Millisecond)
+	// \r is what the phone sends for Enter.
+	ws.WriteMessage(websocket.BinaryMessage, []byte("test input\r"))
 
-	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, msg, err := ws.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(msg), "test input") {
-		t.Errorf("want echo of 'test input', got %q", string(msg))
+	// The echo may arrive after other output (a shell banner), so read on
+	// until it shows up.
+	ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var got strings.Builder
+	for !strings.Contains(got.String(), "test input") {
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatalf("want echo of 'test input', got %q (%v)", got.String(), err)
+		}
+		got.Write(msg)
 	}
 }
 
@@ -126,7 +132,7 @@ func TestTerminalWebSocket(t *testing.T) {
 // same websocket connection. Without a per-connection write mutex,
 // gorilla/websocket panics with "concurrent write to websocket connection".
 func TestWebSocketConcurrentWrites(t *testing.T) {
-	tm := NewTerminalManager("sh", []string{"-c", "for i in $(seq 1 200); do echo line-$i; done; sleep 1"})
+	tm := NewTerminalManager(countCommand(200))
 	srv := httptest.NewServer(http.HandlerFunc(tm.WebSocketHandler()))
 	defer srv.Close()
 	defer tm.Stop()
@@ -160,7 +166,7 @@ func TestWebSocketConcurrentWrites(t *testing.T) {
 // tear down the new pty.
 func TestRestartKeepsNewSessionAlive(t *testing.T) {
 	dir := t.TempDir()
-	tm := NewTerminalManager("sh", []string{"-c", "sleep 5"})
+	tm := NewTerminalManager(sleepCommand(5))
 	if err := tm.StartInDir(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -242,18 +248,19 @@ func TestChildEnvKeepsExistingTerm(t *testing.T) {
 
 // launchd's PATH lacks the user bin dirs claude and its tools live in.
 func TestChildEnvWidensPath(t *testing.T) {
-	t.Setenv("PATH", "/usr/bin:/bin")
+	orig := t.TempDir()
+	t.Setenv("PATH", orig)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("no home dir")
 	}
 	var path string
 	for _, kv := range childEnv() {
-		if strings.HasPrefix(kv, "PATH=") {
-			path = strings.TrimPrefix(kv, "PATH=")
+		if k, v, _ := strings.Cut(kv, "="); fold(k) == "PATH" {
+			path = v
 		}
 	}
-	for _, want := range []string{filepath.Join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/bin"} {
+	for _, want := range append(extraPathDirs(home), orig) {
 		if !pathHasDir(path, want) {
 			t.Errorf("PATH is missing %s: %s", want, path)
 		}

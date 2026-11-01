@@ -446,6 +446,11 @@ func (s *Server) handleScreenStop(w http.ResponseWriter, r *http.Request) {
 // handleScreenState reports whether the Mac is locked, so a page that fell
 // back to VNC knows when video can resume.
 func (s *Server) handleScreenState(w http.ResponseWriter, r *http.Request) {
+	if out, ok := localScreenState(); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, screencapPath(), "state").Output()

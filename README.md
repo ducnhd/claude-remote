@@ -112,6 +112,29 @@ rm /tmp/cs.cnf /tmp/cs.key /tmp/cs.pem /tmp/cs.p12
 
 The certificate does not need to be trusted. Grant the permissions one last time after the first signed install.
 
+## Windows
+
+Windows 10 1809+ / Windows 11 is supported. Claude runs in a ConPTY pseudo-console instead of a Unix pty; everything else (tunnel, QR pairing, handoff, MCP, file browser, history, uploads) works the same.
+
+```powershell
+winget install GoLang.Go
+winget install --id Cloudflare.cloudflared
+
+# Build, copy claude-remote.exe + static\ to ~\bin, register the logon task
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+
+~\bin\claude-remote.exe setup
+~\bin\claude-remote.exe qr
+~\bin\claude-remote.exe doctor   # if anything fails
+
+claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
+```
+
+- **Auto-start** is a Task Scheduler task named `claude-remote` (at logon, in your desktop session). It runs `conhost.exe --headless claude-remote.exe serve --log ~\.claude-remote\server.log`, so no console window appears. `claude-remote install` re-registers and restarts it; `claude-remote uninstall` stops and removes it.
+- **`claude_path`** may point at `claude.exe` (native installer, `~\.local\bin`) or `claude.cmd` (npm, `%APPDATA%\npm`); both directories are added to the child `PATH`.
+- **Screen page** needs a VNC server running as a service on `127.0.0.1:5900`, e.g. TightVNC (`winget install GlavSoft.TightVNC`), with `AllowLoopback=1` and `LoopbackOnly=1` under `HKLMSOFTWARETightVNCServer`. The login asks only for the VNC password; when the PC is locked the page offers an unlock form (Ctrl+Alt+Del, then your Windows password or PIN). The modifier button becomes **Ctrl**, the paste bar uses Ctrl+V, 🔒 runs `LockWorkStation`. Smooth video mode (ScreenCaptureKit) is macOS only, so the page stays on VNC.
+- HEIC uploads are not converted (no `sips`); phones usually send JPEG anyway.
+
 ## Session Handoff
 
 The killer feature: continue Claude Code sessions on your phone.

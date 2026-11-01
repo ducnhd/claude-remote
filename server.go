@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -268,7 +269,8 @@ func (s *Server) handleClaudeStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClaudeStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"running": s.terminal.Running()})
+	// os tells the screen page which paste shortcut the host uses.
+	writeJSON(w, http.StatusOK, map[string]any{"running": s.terminal.Running(), "os": runtime.GOOS})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

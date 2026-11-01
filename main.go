@@ -2,14 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"text/template"
 	"time"
 )
 
@@ -53,8 +53,8 @@ Commands:
   setup      Generate secret + QR code for first-time auth
   serve      Start server (foreground)
   revoke     Regenerate secret, invalidate all sessions
-  install    Install launchd plist + load
-  uninstall  Unload + remove launchd plist
+  install    Run the server at login (launchd on macOS, Task Scheduler on Windows)
+  uninstall  Stop the server and remove it from login
   status     Show running state
   qr         Print a pairing QR code for the running server
   doctor     Diagnose connection problems and print fixes
@@ -121,6 +121,22 @@ func cmdSetup() {
 }
 
 func cmdServe() {
+	// launchd redirects output to server.log itself; Task Scheduler cannot,
+	// so the Windows task passes --log.
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	logPath := fs.String("log", "", "append all output to this file")
+	fs.Parse(os.Args[2:])
+	if *logPath != "" {
+		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening log: %v\n", err)
+			os.Exit(1)
+		}
+		log.SetOutput(f)
+		os.Stdout, os.Stderr = f, f
+	}
+	killChildrenOnExit()
+
 	cfg := getConfig()
 	auth := NewAuth(cfg.SecretPath())
 	if err := auth.LoadSecret(); err != nil {
@@ -153,54 +169,6 @@ func cmdRevoke() {
 	os.Remove(cfg.SessionsPath())
 	fmt.Println("All sessions revoked. New secret generated.")
 	fmt.Println("Run 'claude-remote setup' to generate a new QR code.")
-}
-
-func cmdInstall() {
-	home, _ := os.UserHomeDir()
-	plistDir := filepath.Join(home, "Library", "LaunchAgents")
-	os.MkdirAll(plistDir, 0755)
-	plistPath := filepath.Join(plistDir, "com.claude-remote.plist")
-
-	binPath, err := os.Executable()
-	if err != nil {
-		binPath = "/usr/local/bin/claude-remote"
-	}
-
-	tmpl := template.Must(template.New("plist").Parse(plistTemplate))
-	f, err := os.Create(plistPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	if err := tmpl.Execute(f, map[string]string{
-		"BinPath": binPath,
-		"Home":    home,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing plist: %v\n", err)
-		os.Exit(1)
-	}
-	if err := f.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing plist: %v\n", err)
-		os.Exit(1)
-	}
-
-	// bootout+bootstrap reloads the plist from disk. `load` is a no-op when
-	// the job is already loaded, which silently keeps the old config running.
-	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	exec.Command("launchctl", "bootout", domain+"/com.claude-remote").Run()
-	if out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: launchctl bootstrap failed: %v %s\n", err, strings.TrimSpace(string(out)))
-	}
-	fmt.Printf("Installed and loaded: %s\n", plistPath)
-}
-
-func cmdUninstall() {
-	home, _ := os.UserHomeDir()
-	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.claude-remote.plist")
-	exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/com.claude-remote", os.Getuid())).Run()
-	exec.Command("launchctl", "unload", plistPath).Run() // older macOS fallback
-	os.Remove(plistPath)
-	fmt.Println("Uninstalled.")
 }
 
 // cmdQR asks the running server for a fresh pairing URL and prints its QR.
@@ -269,31 +237,3 @@ func cmdStatus() {
 	fmt.Printf("Phone URL: %s\n", st.PublicBase)
 	fmt.Println("\nPair a phone with: claude-remote qr")
 }
-
-const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.claude-remote</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{{.BinPath}}</string>
-    <string>serve</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>{{.Home}}/.claude-remote/server.log</string>
-  <key>StandardErrorPath</key>
-  <string>{{.Home}}/.claude-remote/server.log</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-  </dict>
-</dict>
-</plist>
-`

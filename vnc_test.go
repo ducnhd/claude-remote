@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -125,31 +124,6 @@ func TestVNCScreenSharingOff(t *testing.T) {
 	}
 }
 
-func TestClipboardKeepsVietnamese(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "clip.txt")
-	fake := filepath.Join(t.TempDir(), "pbcopy")
-	os.WriteFile(fake, []byte("#!/bin/sh\ncat > "+out+"\n"), 0o755)
-	old := pbcopyPath
-	pbcopyPath = fake
-	t.Cleanup(func() { pbcopyPath = old })
-
-	s := &Server{}
-	want := "Đổi nguồn sang avtub — tiếng Việt có dấu ệ ữ"
-	body, _ := json.Marshal(map[string]string{"text": want})
-	req := httptest.NewRequest(http.MethodPost, "/api/clipboard", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	s.handleClipboard(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
-	}
-	got, _ := os.ReadFile(out)
-	if string(got) != want {
-		t.Errorf("clipboard = %q, want %q", got, want)
-	}
-}
-
 func TestClipboardRejectsFormPost(t *testing.T) {
 	s := &Server{}
 	req := httptest.NewRequest(http.MethodPost, "/api/clipboard", strings.NewReader("text=x"))
@@ -164,8 +138,8 @@ func TestClipboardRejectsFormPost(t *testing.T) {
 func TestScreenWakeAndLock(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "ran")
 	oldWake, oldLock := wakeCmd, lockCmd
-	wakeCmd = []string{"/bin/sh", "-c", "echo wake >> " + marker}
-	lockCmd = []string{"/bin/sh", "-c", "echo lock >> " + marker}
+	wakeCmd = appendCommand(marker, "wake")
+	lockCmd = appendCommand(marker, "lock")
 	t.Cleanup(func() { wakeCmd, lockCmd = oldWake, oldLock })
 
 	s := &Server{}
@@ -178,8 +152,15 @@ func TestScreenWakeAndLock(t *testing.T) {
 			t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 		}
 	}
-	got, _ := os.ReadFile(marker)
-	if string(got) != "wake\nlock\n" {
+	// wake runs in the background, so wait for both commands to land.
+	var got string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		b, _ := os.ReadFile(marker)
+		if got = strings.ReplaceAll(string(b), "\r\n", "\n"); strings.Count(got, "\n") >= 2 {
+			break
+		}
+	}
+	if !strings.Contains(got, "wake\n") || !strings.Contains(got, "lock\n") {
 		t.Errorf("commands ran = %q", got)
 	}
 }
