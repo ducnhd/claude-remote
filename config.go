@@ -8,11 +8,12 @@ import (
 )
 
 type Config struct {
-	Port        int      `json:"port"`
-	AllowedDirs []string `json:"allowed_dirs"`
-	ClaudePath  string   `json:"claude_path"`
-	Tunnel      Tunnel   `json:"tunnel"`
-	DataDir     string   `json:"-"`
+	Port        int          `json:"port"`
+	AllowedDirs []string     `json:"allowed_dirs"`
+	ClaudePath  string       `json:"claude_path"`
+	Tunnel      Tunnel       `json:"tunnel"`
+	Wake        []WakeDevice `json:"wake,omitempty"`
+	DataDir     string       `json:"-"`
 }
 
 // Tunnel describes how the phone reaches this Mac.

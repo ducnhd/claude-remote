@@ -1,3 +1,5 @@
+| `wake` | `{name?: string}` | Wake a configured LAN device; without `name`, list them |
+| `/api/wol` | GET/POST | JWT | GET lists config `wake` devices; POST `{"name"}` (JSON only) sends the magic packet. Unknown names → 404, so the phone can only wake configured machines |
 # CLAUDE.md
 
 ## Project Overview
@@ -32,6 +34,7 @@ claude-remote uninstall  # Unload + remove launchd plist
 claude-remote status     # Show running state, tunnel state, phone URL
 claude-remote qr         # Print a pairing QR for the running server (alias: pair; does not touch the secret)
 claude-remote doctor     # Diagnose every link in the connection chain and print fixes
+claude-remote wake [x]   # Wake-on-LAN: list devices, or wake one by name (config "wake") or MAC
 claude-remote version    # Print version
 ```
 
@@ -57,7 +60,8 @@ Claude calls the `handoff` MCP tool and displays QR. The `claude-remote` skill (
 Go binary (single process, two listeners when TLS active)
 ├── main.go        # CLI entry point (setup/serve/revoke/install/uninstall/status/qr/doctor)
 ├── paths.go       # Shared path safety: expandHome, resolvePath, pathWithin, withinAllowed
-├── tunnel.go      # cloudflared supervisor: quick/named modes, URL detection, auto-restart
+├── tunnel.go      # cloudflared supervisor: quick/named,
+│                   #   wake [{name, mac, broadcast?}] (Wake-on-LAN targets) modes, URL detection, auto-restart
 ├── ratelimit.go   # Per-IP token bucket, clientIP/viaProxy/isSecureRequest helpers
 ├── doctor.go      # `doctor` checks + /local/status client
 ├── server.go      # HTTP/HTTPS server, routes, auth cookie helper (setAuthCookie),
@@ -77,6 +81,8 @@ Go binary (single process, two listeners when TLS active)
 │                  #   WebRTC (pion, host candidates only), /api/screen/offer|stop|state
 ├── screencap/     # main.swift → claude-remote-screencap: ScreenCaptureKit + VideoToolbox
 │                  #   H.264 (Constrained Baseline, real-time, keyframe ≤2s), geometry/lock events
+├── wol.go         # Wake-on-LAN: magic packet to 255.255.255.255 + every interface's broadcast,
+│                  #   /api/wol, `wake` CLI + MCP tool; only devices listed in config "wake"
 ├── files.go       # File browser API (read-only, allowlist, ~ expansion)
 ├── config.go      # Config loading/saving (~/.claude-remote/)
 ├── static/        # Web UI (vanilla HTML/JS/CSS, no build step)
@@ -277,7 +283,7 @@ go test ./... -v -count=1       # All tests
 go test -race ./... -v -count=1 # With race detector
 ```
 
-Test files: `auth_test.go`, `config_test.go`, `files_test.go`, `paths_test.go`, `ratelimit_test.go`, `terminal_test.go`, `tunnel_test.go`, `server_test.go`, `mcp_test.go`, `vnc_test.go`, `integration_test.go`, `platform_{unix,windows}_test.go`. Per-OS stand-ins for the claude process (`echoCommand`, `stubClaude`, …) live in `testcmd_{unix,windows}_test.go`; tests whose fakes are shell scripts call `skipWithoutSh`.
+Test files: `auth_test.go`, `wol_test.go`, `config_test.go`, `files_test.go`, `paths_test.go`, `ratelimit_test.go`, `terminal_test.go`, `tunnel_test.go`, `server_test.go`, `mcp_test.go`, `vnc_test.go`, `integration_test.go`, `platform_{unix,windows}_test.go`. Per-OS stand-ins for the claude process (`echoCommand`, `stubClaude`, …) live in `testcmd_{unix,windows}_test.go`; tests whose fakes are shell scripts call `skipWithoutSh`.
 
 ## Deployment
 

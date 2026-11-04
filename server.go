@@ -81,6 +81,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/ws/term", s.protect(s.terminal.WebSocketHandler()))
 	s.mux.Handle("/ws/vnc", s.protect(s.handleVNC))
 	s.mux.Handle("/api/clipboard", s.protect(s.handleClipboard))
+	s.mux.Handle("/api/wol", s.protect(s.handleWakeLAN))
 	s.mux.Handle("/api/upload", s.protect(s.handleUpload))
 	s.mux.Handle("/api/sessions", s.protect(s.handleSessions))
 	s.mux.Handle("/api/sessions/messages", s.protect(s.handleSessionMessages))

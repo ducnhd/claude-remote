@@ -915,6 +915,39 @@
     initPicker();
   });
 
+  // --- Wake-on-LAN ---
+  // The button only shows when config.json lists devices under "wake". The
+  // packet has no reply, so success only means it was sent.
+  const wolBtn = document.getElementById('btn-wol');
+  const wolMenu = document.getElementById('wol-menu');
+  function wakeDevice(name, btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + name;
+    fetch('/api/wol', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }).then(async (r) => {
+      const body = await r.json().catch(() => ({}));
+      btn.textContent = r.ok ? '✓ Sent to ' + name + ' — give it ~20 s' : '✗ ' + name + ': ' + (body.error || r.status);
+    }).catch(() => { btn.textContent = '✗ ' + name + ': network error'; })
+      .finally(() => setTimeout(() => { btn.disabled = false; btn.textContent = '⏻ ' + name; }, 4000));
+  }
+  fetch('/api/wol').then(r => r.ok ? r.json() : null).then((data) => {
+    if (!data || !data.devices || !data.devices.length) return;
+    for (const d of data.devices) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'wol-device';
+      b.textContent = '⏻ ' + d.name;
+      b.title = d.mac;
+      b.addEventListener('click', () => wakeDevice(d.name, b));
+      wolMenu.appendChild(b);
+    }
+    wolBtn.classList.remove('hidden');
+  }).catch(() => {});
+  wolBtn.addEventListener('click', () => wolMenu.classList.toggle('hidden'));
+
   // --- Init ---
   if (handoffDir && handoffMode) {
     showHandoffScreen(handoffDir, handoffMode);

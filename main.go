@@ -37,6 +37,8 @@ func main() {
 		cmdQR()
 	case "doctor":
 		cmdDoctor()
+	case "wake":
+		cmdWake()
 	case "version":
 		fmt.Printf("claude-remote %s\n", version)
 	default:
@@ -58,7 +60,37 @@ Commands:
   status     Show running state
   qr         Print a pairing QR code for the running server
   doctor     Diagnose connection problems and print fixes
+  wake       Wake a LAN machine: wake <name> (from config "wake") or wake <MAC>
   version    Print version`)
+}
+
+// cmdWake sends a Wake-on-LAN packet straight from this process, so it works
+// whether or not the server is running. Without an argument it lists the
+// configured devices.
+func cmdWake() {
+	cfg := getConfig()
+	if len(os.Args) < 3 {
+		if len(cfg.Wake) == 0 {
+			fmt.Println(`No devices configured. Add them to ~/.claude-remote/config.json:
+  "wake": [{"name": "macbook", "mac": "aa:bb:cc:dd:ee:ff"}]
+or wake one directly: claude-remote wake aa:bb:cc:dd:ee:ff`)
+			return
+		}
+		for _, d := range cfg.Wake {
+			fmt.Printf("%-20s %s\n", d.Name, d.MAC)
+		}
+		return
+	}
+	arg := os.Args[2]
+	d, ok := findWakeDevice(cfg.Wake, arg)
+	if !ok {
+		d = WakeDevice{Name: arg, MAC: arg}
+	}
+	if err := sendWake(d); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Magic packet sent to %s (%s). Wake-on-LAN has no reply; give it ~20 s.\n", d.Name, d.MAC)
 }
 
 func getConfig() *Config {

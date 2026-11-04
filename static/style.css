@@ -225,6 +225,21 @@ header {
   white-space: nowrap;
 }
 
+#btn-wol {
+  margin-left: auto; padding: 4px 10px; border: 1px solid #444; border-radius: 4px;
+  background: none; color: #eee; font-size: 13px; flex-shrink: 0;
+}
+#btn-wol:not(.hidden) + #btn-screen { margin-left: 6px; }
+#wol-menu {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 12px;
+  background: #16213e; border-bottom: 1px solid #333; flex-shrink: 0;
+}
+.wol-device {
+  padding: 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a2e;
+  color: #eee; font-size: 14px; text-align: left;
+}
+.wol-device:disabled { opacity: .7; }
+
 #btn-screen {
   margin-left: auto; padding: 4px 10px; border: 1px solid #444; border-radius: 4px;
   color: #eee; text-decoration: none; font-size: 13px; flex-shrink: 0;

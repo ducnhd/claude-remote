@@ -19,8 +19,11 @@
     <span>Claude Remote</span>
     <span id="status-text">Not connected</span>
     <button id="btn-retry" class="retry hidden" type="button">Retry</button>
+    <button id="btn-wol" class="hidden" type="button" title="Wake a computer on the LAN (Wake-on-LAN)">⏻ Wake</button>
     <a id="btn-screen" href="/screen.html" title="View and control the Mac screen">🖥 Screen</a>
   </header>
+  <!-- Wake-on-LAN: one button per device from config.json "wake" -->
+  <div id="wol-menu" class="hidden"></div>
 
   <!-- Connection problem banner -->
   <div id="conn-banner" class="banner hidden">

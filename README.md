@@ -135,6 +135,23 @@ claude mcp add --transport http -s user claude-remote http://127.0.0.1:8823/mcp
 - **Screen page** needs a VNC server running as a service on `127.0.0.1:5900`, e.g. TightVNC (`winget install GlavSoft.TightVNC`), with `AllowLoopback=1` and `LoopbackOnly=1` under `HKLMSOFTWARETightVNCServer`. The login asks only for the VNC password; when the PC is locked the page offers an unlock form (Ctrl+Alt+Del, then your Windows password or PIN). The modifier button becomes **Ctrl**, the paste bar uses Ctrl+V, 🔒 runs `LockWorkStation`. Smooth video mode (ScreenCaptureKit) is macOS only, so the page stays on VNC.
 - HEIC uploads are not converted (no `sips`); phones usually send JPEG anyway.
 
+## Wake-on-LAN
+
+The server can wake other machines on its LAN, e.g. a sleeping Mac while it runs on an always-on Windows PC. List them in `~/.claude-remote/config.json` and restart the server:
+
+```json
+"wake": [
+  {"name": "macbook", "mac": "aa:bb:cc:dd:ee:ff"},
+  {"name": "nas", "mac": "11:22:33:44:55:66", "broadcast": "192.168.1.255"}
+]
+```
+
+- **Phone:** a **⏻ Wake** button appears in the header; pick the machine.
+- **Claude Code:** "wake my macbook" (MCP tool `wake`).
+- **Terminal:** `claude-remote wake macbook`, or `claude-remote wake aa:bb:cc:dd:ee:ff` for a machine not in the list.
+
+The packet goes to `255.255.255.255` and to the broadcast address of every LAN interface (port 9), or only to `broadcast` when set. Only configured machines can be woken from the phone. The target must have Wake-on-LAN enabled: on a Mac, System Settings → Battery/Energy → "Wake for network access" (works on Ethernet and, for many Macs, Wi-Fi while sleeping, not when shut down); on a PC, the NIC's "Wake on Magic Packet" plus BIOS WoL. The sender must be on the same LAN: Tailscale and Cloudflare cannot carry it.
+
 ## Session Handoff
 
 The killer feature: continue Claude Code sessions on your phone.

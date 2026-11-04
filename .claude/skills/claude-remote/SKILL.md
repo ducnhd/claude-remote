@@ -1,6 +1,6 @@
 ---
 name: claude-remote
-description: Hand the current Claude Code session off to the user's phone with claude-remote (QR code), pair a phone, or check/fix the claude-remote service. Use whenever the user wants to continue, view or control this work from their phone or mobile — "handoff to phone", "continue on my phone", "QR for phone", "send this to my phone", "chuyển sang điện thoại", "tiếp tục trên điện thoại", "mở trên điện thoại", "quét QR", "handoff", "claude-remote", "/handoff".
+description: Hand the current Claude Code session off to the user's phone with claude-remote (QR code), pair a phone, wake a sleeping machine on the LAN (Wake-on-LAN), or check/fix the claude-remote service. Use whenever the user wants to continue, view or control this work from their phone or mobile — "handoff to phone", "continue on my phone", "QR for phone", "send this to my phone", "chuyển sang điện thoại", "tiếp tục trên điện thoại", "mở trên điện thoại", "quét QR", "handoff", "claude-remote", "/handoff", "wake my mac", "bật máy mac", "đánh thức máy".
 user-invocable: true
 ---
 
@@ -25,4 +25,5 @@ claude-remote runs on this machine and exposes Claude Code to the phone browser.
 ## Other requests
 
 - Pair a new phone without handing off a session: run `claude-remote qr` (Windows: `~\bin\claude-remote.exe qr`) and show its output.
+- Wake a sleeping machine on the LAN ("wake my mac", "bật máy mac"): call the MCP tool `wake` with its `name`; without a name it lists the configured devices. None configured → tell the user to add `"wake": [{"name": "...", "mac": "aa:bb:cc:dd:ee:ff"}]` to `~/.claude-remote/config.json` and restart the server.
 - "It doesn't work" / phone cannot connect: run `claude-remote doctor` and follow the fixes it prints.

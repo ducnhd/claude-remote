@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -119,6 +120,19 @@ func (s *Server) mcpToolsList(w http.ResponseWriter, req *jsonrpcRequest) {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			"name":        "wake",
+			"description": "Wake a machine on the LAN (e.g. the user's Mac) with a Wake-on-LAN magic packet. Call without a name to list the configured devices",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Device name (or MAC) from the \"wake\" list in config.json",
+					},
+				},
+			},
+		},
 	}
 	s.mcpReply(w, req.ID, map[string]interface{}{"tools": tools})
 }
@@ -138,6 +152,8 @@ func (s *Server) mcpToolsCall(w http.ResponseWriter, req *jsonrpcRequest) {
 		s.mcpToolHandoff(w, req.ID, params.Arguments)
 	case "status":
 		s.mcpToolStatus(w, req.ID)
+	case "wake":
+		s.mcpToolWake(w, req.ID, params.Arguments)
 	default:
 		s.mcpError(w, req.ID, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -239,6 +255,37 @@ func (s *Server) mcpToolStatus(w http.ResponseWriter, id interface{}) {
 		Content: []mcpContent{{Type: "text", Text: text}},
 	}
 	s.mcpReply(w, id, result)
+}
+
+// mcpToolWake wakes a configured LAN device. With no name it lists them.
+func (s *Server) mcpToolWake(w http.ResponseWriter, id interface{}, args json.RawMessage) {
+	var a struct {
+		Name string `json:"name"`
+	}
+	json.Unmarshal(args, &a)
+	if a.Name == "" {
+		text := "No devices configured: add \"wake\": [{\"name\":…,\"mac\":…}] to ~/.claude-remote/config.json"
+		if len(s.config.Wake) > 0 {
+			text = "Wake-on-LAN devices:"
+			for _, d := range s.config.Wake {
+				text += "\n- " + d.Name + " (" + d.MAC + ")"
+			}
+		}
+		s.mcpReply(w, id, mcpToolResult{Content: []mcpContent{{Type: "text", Text: text}}})
+		return
+	}
+	d, ok := findWakeDevice(s.config.Wake, a.Name)
+	if !ok {
+		s.mcpError(w, id, -32602, fmt.Sprintf("unknown device: %s", a.Name))
+		return
+	}
+	if err := sendWake(d); err != nil {
+		s.mcpError(w, id, -32603, err.Error())
+		return
+	}
+	log.Printf("wake-on-lan %s (%s) via MCP", d.Name, d.MAC)
+	text := fmt.Sprintf("Magic packet sent to %s (%s). Wake-on-LAN has no reply; it usually takes 10-30 s to come up.", d.Name, d.MAC)
+	s.mcpReply(w, id, mcpToolResult{Content: []mcpContent{{Type: "text", Text: text}}})
 }
 
 func (s *Server) mcpReply(w http.ResponseWriter, id interface{}, result interface{}) {
