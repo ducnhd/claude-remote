@@ -259,7 +259,9 @@
     document.getElementById('btn-wake').addEventListener('click', () => screenCmd('wake'));
     document.getElementById('btn-lock').addEventListener('click', async () => {
       if (!confirm('Lock the ' + hostName + ' now? You will need its password to get back in.')) return;
-      if (await screenCmd('lock')) setStatus('Locked — tap ☀ then type your password with ⌨', connected);
+      // Go straight to the unlock form: the video stream may stop without a
+      // "locked" event, and nothing else would bring the form up.
+      if (await screenCmd('lock')) lockedFallback({ confirmed: false });
     });
 
     // --- Zoom and pan ---
@@ -568,15 +570,15 @@
       const events = pc.createDataChannel('events');
       events.onmessage = (e) => { try { onVideoEvent(JSON.parse(e.data)); } catch (err) {} };
       // The server hangs up when capture ends; this notices in milliseconds.
-      events.onclose = () => { if (pc === videoPc) videoFailed('video stopped'); };
+      events.onclose = () => { if (pc === videoPc) videoStopped('video stopped'); };
       pc.ontrack = (e) => { video.srcObject = e.streams[0] || new MediaStream([e.track]); video.play().catch(() => {}); };
       pc.onconnectionstatechange = () => {
         if (pc !== videoPc) return;
-        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') videoFailed('video connection lost');
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') videoStopped('video connection lost');
         // Browsers take ~30 s to call a dead link "failed"; VNC is better
         // than a frozen picture long before that.
         if (pc.connectionState === 'disconnected') {
-          setTimeout(() => { if (pc === videoPc && pc.connectionState === 'disconnected') videoFailed('video connection lost'); }, 4000);
+          setTimeout(() => { if (pc === videoPc && pc.connectionState === 'disconnected') videoStopped('video connection lost'); }, 4000);
         }
       };
       try {
@@ -640,27 +642,45 @@
       if (mode === 'video' && retry) retryTimer = setTimeout(startVideo, 5000);
     }
 
+    // Capture often ends because the Mac just locked, before (or without)
+    // its "locked" event reaching the page: ask once before treating it as
+    // a failure, or the unlock form never appears.
+    async function videoStopped(why) {
+      stopVideo();
+      try {
+        const res = await fetch('/api/screen/state');
+        if (res.ok && (await res.json()).locked) { lockedFallback(); return; }
+      } catch (e) {}
+      videoFailed(why);
+    }
+
     function onVideoEvent(ev) {
       if (ev.event === 'locked' && ev.locked) lockedFallback();
-      else if (ev.event === 'error') ev.locked ? lockedFallback() : videoFailed(ev.message || 'capture stopped');
+      else if (ev.event === 'error') ev.locked ? lockedFallback() : videoStopped(ev.message || 'capture stopped');
     }
 
     // ScreenCaptureKit shows nothing of the lock screen, and the lock screen
     // over VNC is the whole two-display framebuffer: too slow to use. So the
     // page asks for the password and types it blind; the lock screen itself
     // is only fetched on request. Video comes back once the Mac is unlocked.
-    function lockedFallback() {
+    // confirmed: false when the page only asked for the lock (🔒): the Mac
+    // may report "unlocked" for a moment until the lock takes hold, so only
+    // a locked → unlocked change counts, or 10 s without the lock showing.
+    function lockedFallback({ confirmed = true } = {}) {
       lockQuiet = true; // before stopVideo, so it does not restart VNC pixels
       stopVideo();
       if (lockPoll) return;
+      let sawLocked = confirmed;
+      const since = Date.now();
       if (connected) setStatus('Connected — ' + hostName + ' is locked', true);
       else statusEl.textContent = hostName + ' is locked — log in to Screen Sharing to unlock it';
-      showUnlock(unlockPrompt());
+      showUnlock(unlockPrompt(), { wake: confirmed });
       lockPoll = setInterval(async () => {
         try {
           const res = await fetch('/api/screen/state');
           if (!res.ok) return;
-          if (!(await res.json()).locked) {
+          if ((await res.json()).locked) { sawLocked = true; return; }
+          if (sawLocked || Date.now() - since > 10000) {
             clearInterval(lockPoll);
             lockPoll = null;
             unlockBtn.hidden = true;
@@ -709,18 +729,41 @@
     unlockPass.addEventListener('focus', preWake);
     unlockPass.addEventListener('input', preWake);
     // Typing needs Screen Sharing; until its login is done that form shows.
-    function showUnlock(msg) {
+    // wake: false right after 🔒 — waking the display then could stop the
+    // lock from taking hold. The field's focus wakes it once it is tapped.
+    function showUnlock(msg, { wake = true } = {}) {
       if (!lockPoll && !lockQuiet) return;
       unlockMsg.textContent = msg;
       if (!connected) return;
       unlockEl.classList.add('show');
+      if (!wake) return;
       unlockPass.focus();
       preWake(); // the lock screen gets ready while the password is typed
     }
     unlockBtn.addEventListener('click', () => {
       if (!connected) { statusEl.textContent = 'Log in to Screen Sharing first (↻)'; return; }
+      // Plain VNC mode only offers the button; tapping it enters the form.
+      if (!lockPoll && !lockQuiet) { lockedFallback(); return; }
       showUnlock(unlockMsg.textContent);
     });
+
+    // Nothing else tells the page about a lock that happened before it was
+    // opened, or by itself (idle timeout, someone at the Mac) while video is
+    // off: ask the server now and every few seconds. Video mode and Windows
+    // go to the unlock form; plain VNC on a Mac just shows the lock screen,
+    // with 🔓 offered.
+    async function checkLock() {
+      if (lockPoll || lockQuiet || document.hidden) return;
+      try {
+        const res = await fetch('/api/screen/state');
+        if (!res.ok || lockPoll || lockQuiet) return;
+        const locked = (await res.json()).locked;
+        if (!locked) unlockBtn.hidden = true;
+        else if (hostWindows || mode === 'video') lockedFallback();
+        else unlockBtn.hidden = false;
+      } catch (e) {}
+    }
+    setInterval(checkLock, 3000);
     // Escape hatch: watch the real lock screen (another user, an update
     // prompt…) at VNC speed, with cheaper pictures to soften the lag.
     document.getElementById('unlock-view').addEventListener('click', () => {
@@ -1043,18 +1086,12 @@
           const b = document.getElementById(id);
           b.title = b.title.replace(/the Mac/g, 'the PC');
         }
-        // No video stream reports the lock here, so ask the server: it
-        // watches for the Windows lock screen (LogonUI.exe).
-        setInterval(async () => {
-          if (!connected || lockPoll || lockQuiet || document.hidden) return;
-          try {
-            const res = await fetch('/api/screen/state');
-            if (res.ok && (await res.json()).locked) lockedFallback();
-          } catch (e) {}
-        }, 3000);
+        // checkLock asks the server, which watches for the Windows lock
+        // screen (LogonUI.exe).
       }
       connect();
       showMode();
+      checkLock(); // a Mac locked before the page opened
       startVideo();
     });
   </script>
